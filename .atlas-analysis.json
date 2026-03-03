@@ -1,0 +1,245 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "go_logs",
+  "projectDescription": "Modern structured logging library for Go with typed fields, multiple formatters, hooks, and context propagation",
+  "theme": "aspen",
+  "primaryColor": "#00ADD8",
+  "lightColor": "#5DC9E2",
+  "darkColor": "#00758F",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "core/levels",
+              "core/structured-logging",
+              "core/formatters",
+              "core/child-loggers",
+              "core/context-propagation"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/options",
+              "configuration/environment-variables",
+              "configuration/output-destinations"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "advanced/hooks",
+              "advanced/rotating-files",
+              "advanced/redaction",
+              "advanced/caller-info",
+              "advanced/stack-traces",
+              "advanced/metrics"
+            ]
+          },
+          {
+            "group": "Optional Modules",
+            "pages": [
+              "modules/async",
+              "modules/http-endpoints",
+              "modules/signal-handlers",
+              "modules/opentelemetry",
+              "modules/syslog"
+            ]
+          },
+          {
+            "group": "Testing",
+            "pages": [
+              "testing/overview",
+              "testing/mock-logger",
+              "testing/capture-buffer"
+            ]
+          },
+          {
+            "group": "Migration",
+            "pages": [
+              "migration/v2-to-v3",
+              "migration/backward-compatibility"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Logger Interface",
+            "pages": [
+              "api/logger",
+              "api/new",
+              "api/log-methods"
+            ]
+          },
+          {
+            "group": "Structured Fields",
+            "pages": [
+              "api/field-types",
+              "api/field-helpers"
+            ]
+          },
+          {
+            "group": "Levels",
+            "pages": [
+              "api/levels"
+            ]
+          },
+          {
+            "group": "Options",
+            "pages": [
+              "api/options/core",
+              "api/options/output",
+              "api/options/formatting",
+              "api/options/advanced"
+            ]
+          },
+          {
+            "group": "Formatters",
+            "pages": [
+              "api/formatters/text",
+              "api/formatters/json"
+            ]
+          },
+          {
+            "group": "Hooks",
+            "pages": [
+              "api/hooks/interface",
+              "api/hooks/slack",
+              "api/hooks/custom"
+            ]
+          },
+          {
+            "group": "Writers",
+            "pages": [
+              "api/writers/rotating-file",
+              "api/writers/multi-writer",
+              "api/writers/sampling"
+            ]
+          },
+          {
+            "group": "Context",
+            "pages": [
+              "api/context/propagation",
+              "api/context/helpers"
+            ]
+          },
+          {
+            "group": "Global Logger (v2 API)",
+            "pages": [
+              "api/v2/functions",
+              "api/v2/formatted",
+              "api/v2/context"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Common Use Cases",
+            "pages": [
+              "examples/basic-usage",
+              "examples/web-server",
+              "examples/microservices",
+              "examples/cli-application"
+            ]
+          },
+          {
+            "group": "Integration Examples",
+            "pages": [
+              "examples/slack-notifications",
+              "examples/elk-stack",
+              "examples/opentelemetry",
+              "examples/production-setup"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Structured logging with typed fields (String, Int, Err, etc.)",
+    "Multiple formatters (TextFormatter for dev, JSONFormatter for production)",
+    "Child loggers with field propagation",
+    "Context propagation (trace_id, span_id)",
+    "Extensible hooks system (Slack, Sentry, OpenTelemetry, Syslog)",
+    "Rotating file writer with compression and time-based rotation",
+    "Automatic redaction of sensitive data",
+    "Caller info and stack traces",
+    "Async logging for high-throughput scenarios",
+    "Dynamic log level via HTTP endpoints",
+    "Testing utilities (MockLogger, CaptureBuffer)",
+    "Zero-allocation field creation",
+    "100% backward compatible with v2 API"
+  ],
+  "publicApiSurface": [
+    "New(opts ...Option) (Logger, error)",
+    "Logger.Log(level Level, msg string, fields ...Field)",
+    "Logger.LogCtx(ctx context.Context, level Level, msg string, fields ...Field)",
+    "Logger.Info(msg string, fields ...Field)",
+    "Logger.Debug(msg string, fields ...Field)",
+    "Logger.Warn(msg string, fields ...Field)",
+    "Logger.Error(msg string, fields ...Field)",
+    "Logger.Fatal(msg string, fields ...Field)",
+    "Logger.Trace(msg string, fields ...Field)",
+    "Logger.With(fields ...Field) Logger",
+    "Logger.SetLevel(level Level)",
+    "Logger.GetLevel() Level",
+    "Logger.Sync() error",
+    "String(key, val string) Field",
+    "Int(key string, val int) Field",
+    "Int64(key string, val int64) Field",
+    "Float64(key string, val float64) Field",
+    "Bool(key string, val bool) Field",
+    "Err(err error) Field",
+    "Any(key string, val interface{}) Field",
+    "WithLevel(level Level) Option",
+    "WithOutput(w io.Writer) Option",
+    "WithFormatter(f Formatter) Option",
+    "WithHooks(hooks ...Hook) Option",
+    "WithCaller(enabled bool) Option",
+    "WithStackTrace(enabled bool) Option",
+    "WithCommonRedaction() Option",
+    "WithRotatingFile(filename string, maxSizeMB, maxBackups int) Option",
+    "NewTextFormatter() Formatter",
+    "NewJSONFormatter() Formatter",
+    "NewRotatingFileWriter(filename string, maxSizeMB, maxBackups int) (*RotatingFileWriter, error)",
+    "NewMultiWriter(writers ...io.Writer) io.Writer",
+    "WithTraceID(ctx context.Context, traceID string) context.Context",
+    "WithSpanID(ctx context.Context, spanID string) context.Context",
+    "SetDefault(logger Logger)",
+    "GlobalInfo(msg string, fields ...Field)",
+    "GlobalDebug(msg string, fields ...Field)",
+    "GlobalWarn(msg string, fields ...Field)",
+    "GlobalError(msg string, fields ...Field)",
+    "InfoLog(message string)",
+    "ErrorLog(message string)",
+    "WarningLog(message string)",
+    "SuccessLog(message string)",
+    "FatalLog(message string)",
+    "Infof(format string, args ...interface{})",
+    "Errorf(format string, args ...interface{})",
+    "async.Wrap(logger Logger, bufferSize int) Logger",
+    "http.NewDynamicLevelHandler(logger Logger, config Config) http.Handler",
+    "signal.NewSIGHUPHandler(rotator Rotator) *Handler",
+    "hooks.NewSlackHook(token, channelID string) Hook",
+    "hooks.NewSyslogHook(tag string) (Hook, error)",
+    "otel.NewOTLPHook(endpoint string) Hook"
+  ]
+}
