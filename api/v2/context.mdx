@@ -1,0 +1,366 @@
+---
+title: 'V2 Context Functions'
+description: 'Legacy context-aware logging functions'
+icon: 'link-simple'
+---
+
+## Overview
+
+The v2 context functions accept a `context.Context` parameter for distributed tracing and request correlation. These functions are part of the legacy v2 API and are maintained for backward compatibility.
+
+<Warning>
+  **Current Limitation:** In the v2 API, the context parameter is accepted but **not yet used internally**. Future versions will extract trace IDs from context and include them in log messages. For full context support, use the [v3 Logger API](/core/logger-context).
+</Warning>
+
+<Note>
+  The v2 API is **legacy**. For new code, use the [v3 Logger API](/core/logger) with `LogCtx` for full context propagation support.
+</Note>
+
+## Basic Context Functions
+
+### InfoLogCtx
+
+Logs an informational message with context support.
+
+```go
+func InfoLogCtx(ctx context.Context, message string)
+```
+
+**Parameters:**
+- `ctx` - The context (intended for tracing, cancellation, etc.)
+- `message` - The informational message to log
+
+**Current Behavior:**
+- Accepts context but does not use it (TODO: extract trace ID)
+- Calls `InfoLog(message)` internally
+- Displays in **yellow** color
+
+**Example:**
+
+```go
+ctx := context.Background()
+go_logs.InfoLogCtx(ctx, "Request processed successfully")
+```
+
+**Source Reference:** `api.go:123-139`
+
+---
+
+### ErrorLogCtx
+
+Logs an error message with context support.
+
+```go
+func ErrorLogCtx(ctx context.Context, message string)
+```
+
+**Parameters:**
+- `ctx` - The context (intended for tracing, cancellation, etc.)
+- `message` - The error message to log
+
+**Current Behavior:**
+- Accepts context but does not use it (TODO: extract trace ID)
+- Calls `ErrorLog(message)` internally
+- Displays in **red** color
+
+**Example:**
+
+```go
+ctx := context.Background()
+go_logs.ErrorLogCtx(ctx, "Failed to process request")
+```
+
+**Source Reference:** `api.go:141-157`
+
+---
+
+### WarningLogCtx
+
+Logs a warning message with context support.
+
+```go
+func WarningLogCtx(ctx context.Context, message string)
+```
+
+**Parameters:**
+- `ctx` - The context (intended for tracing, cancellation, etc.)
+- `message` - The warning message to log
+
+**Current Behavior:**
+- Accepts context but does not use it (TODO: extract trace ID)
+- Calls `WarningLog(message)` internally
+- Displays in **yellow** color
+
+**Example:**
+
+```go
+ctx := context.Background()
+go_logs.WarningLogCtx(ctx, "Deprecated API usage detected")
+```
+
+**Source Reference:** `api.go:159-175`
+
+---
+
+### SuccessLogCtx
+
+Logs a success message with context support.
+
+```go
+func SuccessLogCtx(ctx context.Context, message string)
+```
+
+**Parameters:**
+- `ctx` - The context (intended for tracing, cancellation, etc.)
+- `message` - The success message to log
+
+**Current Behavior:**
+- Accepts context but does not use it (TODO: extract trace ID)
+- Calls `SuccessLog(message)` internally
+- Displays in **green** color
+
+**Example:**
+
+```go
+ctx := context.Background()
+go_logs.SuccessLogCtx(ctx, "Operation completed successfully")
+```
+
+**Source Reference:** `api.go:177-193`
+
+---
+
+## Formatted Context Functions
+
+### InfoLogCtxf
+
+Logs an informational message with context and formatting.
+
+```go
+func InfoLogCtxf(ctx context.Context, format string, args ...interface{})
+```
+
+**Parameters:**
+- `ctx` - The context (intended for tracing, cancellation, etc.)
+- `format` - The format string (follows `fmt.Sprintf` syntax)
+- `args` - Arguments for the format string
+
+**Behavior:**
+- Formats message using `fmt.Sprintf(format, args...)`
+- Calls `InfoLogCtx(ctx, message)` internally
+
+**Example:**
+
+```go
+ctx := context.Background()
+go_logs.InfoLogCtxf(ctx, "User %s logged in from %s", username, ipAddress)
+```
+
+**Source Reference:** `api.go:195-211`
+
+---
+
+### ErrorLogCtxf
+
+Logs an error message with context and formatting.
+
+```go
+func ErrorLogCtxf(ctx context.Context, format string, args ...interface{})
+```
+
+**Parameters:**
+- `ctx` - The context (intended for tracing, cancellation, etc.)
+- `format` - The format string (follows `fmt.Sprintf` syntax)
+- `args` - Arguments for the format string
+
+**Behavior:**
+- Formats message using `fmt.Sprintf(format, args...)`
+- Calls `ErrorLogCtx(ctx, message)` internally
+
+**Example:**
+
+```go
+ctx := context.Background()
+go_logs.ErrorLogCtxf(ctx, "Request failed: %v", err)
+```
+
+**Source Reference:** `api.go:213-229`
+
+---
+
+### WarningLogCtxf
+
+Logs a warning message with context and formatting.
+
+```go
+func WarningLogCtxf(ctx context.Context, format string, args ...interface{})
+```
+
+**Parameters:**
+- `ctx` - The context (intended for tracing, cancellation, etc.)
+- `format` - The format string (follows `fmt.Sprintf` syntax)
+- `args` - Arguments for the format string
+
+**Behavior:**
+- Formats message using `fmt.Sprintf(format, args...)`
+- Calls `WarningLogCtx(ctx, message)` internally
+
+**Example:**
+
+```go
+ctx := context.Background()
+go_logs.WarningLogCtxf(ctx, "API version %s is deprecated", oldVersion)
+```
+
+**Source Reference:** `api.go:231-247`
+
+---
+
+### SuccessLogCtxf
+
+Logs a success message with context and formatting.
+
+```go
+func SuccessLogCtxf(ctx context.Context, format string, args ...interface{})
+```
+
+**Parameters:**
+- `ctx` - The context (intended for tracing, cancellation, etc.)
+- `format` - The format string (follows `fmt.Sprintf` syntax)
+- `args` - Arguments for the format string
+
+**Behavior:**
+- Formats message using `fmt.Sprintf(format, args...)`
+- Calls `SuccessLogCtx(ctx, message)` internally
+
+**Example:**
+
+```go
+ctx := context.Background()
+go_logs.SuccessLogCtxf(ctx, "Processed %d records", count)
+```
+
+**Source Reference:** `api.go:249-265`
+
+---
+
+## Usage Examples
+
+### HTTP Handler with Context
+
+```go
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+    ctx := r.Context()
+    
+    go_logs.InfoLogCtx(ctx, "Processing request")
+    
+    if err := process(ctx); err != nil {
+        go_logs.ErrorLogCtxf(ctx, "Processing failed: %v", err)
+        http.Error(w, "Internal error", 500)
+        return
+    }
+    
+    go_logs.SuccessLogCtx(ctx, "Request completed")
+}
+```
+
+### gRPC Service with Context
+
+```go
+func (s *Server) GetUser(ctx context.Context, req *pb.GetUserRequest) (*pb.User, error) {
+    go_logs.InfoLogCtxf(ctx, "Fetching user: %s", req.UserId)
+    
+    user, err := s.db.GetUser(ctx, req.UserId)
+    if err != nil {
+        go_logs.ErrorLogCtxf(ctx, "User fetch failed: %v", err)
+        return nil, err
+    }
+    
+    go_logs.SuccessLogCtxf(ctx, "User fetched: %s", user.Name)
+    return user, nil
+}
+```
+
+### Background Job with Context
+
+```go
+func processJob(ctx context.Context, jobID string) error {
+    go_logs.InfoLogCtxf(ctx, "Starting job: %s", jobID)
+    
+    select {
+    case <-ctx.Done():
+        go_logs.WarningLogCtxf(ctx, "Job cancelled: %s", jobID)
+        return ctx.Err()
+    case <-time.After(5 * time.Second):
+        go_logs.SuccessLogCtxf(ctx, "Job completed: %s", jobID)
+        return nil
+    }
+}
+```
+
+## Current Limitations
+
+<Warning>
+  The v2 context functions have significant limitations:
+</Warning>
+
+1. **Context is not used:** The `ctx` parameter is accepted but ignored
+2. **No trace ID extraction:** Cannot extract `trace_id`, `span_id`, etc. from context
+3. **No automatic field propagation:** Context values are not included in logs
+4. **TODO markers in code:** Source code contains `// TODO: Extract trace ID from context`
+
+**Source Evidence:**
+```go
+// Source: api.go:136-138
+func InfoLogCtx(ctx context.Context, message string) {
+    // TODO: Extract trace ID from context and include in log
+    InfoLog(message)
+}
+```
+
+## Migration to V3
+
+The v3 API provides **full context support** with automatic field extraction:
+
+**V2 Context (Limited):**
+```go
+ctx := context.Background()
+go_logs.InfoLogCtx(ctx, "Processing request")  // Context ignored!
+```
+
+**V3 Context (Full Support):**
+```go
+ctx := go_logs.WithTraceID(context.Background(), "trace-123")
+ctx = go_logs.WithUserID(ctx, "user-456")
+
+logger.LogCtx(ctx, go_logs.InfoLevel, "Processing request")
+// Automatically includes: {"trace_id":"trace-123", "user_id":"user-456"}
+```
+
+**Benefits of V3:**
+- Automatic extraction of `trace_id`, `span_id`, `request_id`, `user_id`
+- Structured fields instead of string formatting
+- Full OpenTelemetry integration (future)
+- Better performance (zero allocations)
+
+See:
+- [V3 Context Propagation](/api/context/propagation)
+- [V3 Context Helpers](/api/context/helpers)
+- [Migration Guide](/advanced/migration)
+
+## Future Enhancements
+
+Planned improvements for v2 context functions:
+
+1. Extract trace IDs from context and include in log messages
+2. Support for OpenTelemetry context propagation
+3. Automatic correlation with distributed tracing systems
+
+However, these features are **already available in v3**. We recommend migrating to v3 for full context support.
+
+## Related API
+
+- [V2 Global Functions](/api/v2/functions) - Basic logging functions
+- [V2 Formatted Functions](/api/v2/formatted) - Formatted logging without context
+- [Context Propagation](/api/context/propagation) - V3 context propagation (recommended)
+- [Context Helpers](/api/context/helpers) - V3 context extraction (recommended)

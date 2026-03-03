@@ -1,122 +1,188 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "go_logs",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#00ADD8",
+    "light": "#5DC9E2",
+    "dark": "#00758F"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/drossan/go_logs"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/drossan/go_logs"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "installation",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "core/levels",
+              "core/structured-logging",
+              "core/formatters",
+              "core/child-loggers",
+              "core/context-propagation"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Configuration",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "configuration/options",
+              "configuration/environment-variables",
+              "configuration/output-destinations"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Advanced Features",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "advanced/hooks",
+              "advanced/rotating-files",
+              "advanced/redaction",
+              "advanced/caller-info",
+              "advanced/stack-traces",
+              "advanced/metrics"
+            ]
+          },
+          {
+            "group": "Optional Modules",
+            "pages": [
+              "modules/async",
+              "modules/http-endpoints",
+              "modules/signal-handlers",
+              "modules/opentelemetry",
+              "modules/syslog"
+            ]
+          },
+          {
+            "group": "Testing",
+            "pages": [
+              "testing/overview",
+              "testing/mock-logger",
+              "testing/capture-buffer"
+            ]
+          },
+          {
+            "group": "Migration",
+            "pages": [
+              "migration/v2-to-v3",
+              "migration/backward-compatibility"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Logger Interface",
             "pages": [
-              "api-reference/introduction"
+              "api/logger",
+              "api/new",
+              "api/log-methods"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Structured Fields",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/field-types",
+              "api/field-helpers"
+            ]
+          },
+          {
+            "group": "Levels",
+            "pages": [
+              "api/levels"
+            ]
+          },
+          {
+            "group": "Options",
+            "pages": [
+              "api/options/core",
+              "api/options/output",
+              "api/options/formatting",
+              "api/options/advanced"
+            ]
+          },
+          {
+            "group": "Formatters",
+            "pages": [
+              "api/formatters/text",
+              "api/formatters/json"
+            ]
+          },
+          {
+            "group": "Hooks",
+            "pages": [
+              "api/hooks/interface",
+              "api/hooks/slack",
+              "api/hooks/custom"
+            ]
+          },
+          {
+            "group": "Writers",
+            "pages": [
+              "api/writers/rotating-file",
+              "api/writers/multi-writer",
+              "api/writers/sampling"
+            ]
+          },
+          {
+            "group": "Context",
+            "pages": [
+              "api/context/propagation",
+              "api/context/helpers"
+            ]
+          },
+          {
+            "group": "Global Logger (v2 API)",
+            "pages": [
+              "api/v2/functions",
+              "api/v2/formatted",
+              "api/v2/context"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Common Use Cases",
+            "pages": [
+              "examples/basic-usage",
+              "examples/web-server",
+              "examples/microservices",
+              "examples/cli-application"
+            ]
+          },
+          {
+            "group": "Integration Examples",
+            "pages": [
+              "examples/slack-notifications",
+              "examples/elk-stack",
+              "examples/opentelemetry",
+              "examples/production-setup"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

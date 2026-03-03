@@ -1,0 +1,297 @@
+---
+title: Async Logging
+description: Non-blocking asynchronous logging for high-throughput applications
+---
+
+The `async` module provides asynchronous logging capabilities by writing log entries in a separate goroutine. This is especially useful for high-throughput applications or when logging to slow outputs like remote services or network filesystems.
+
+## Features
+
+- **Non-blocking log writes** - Log calls return immediately
+- **Buffered channel** for high throughput
+- **Graceful shutdown** with configurable timeout
+- **Drop-on-overflow** behavior to prevent blocking
+- **Shared metrics** with underlying logger
+
+## Installation
+
+```bash
+go get github.com/drossan/go_logs/async
+```
+
+## Basic Usage
+
+```go
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/async"
+)
+
+// Create a synchronous logger first
+syncLogger, _ := go_logs.New(go_logs.WithLevel(go_logs.InfoLevel))
+
+// Wrap it with async capabilities (buffer size 1000)
+asyncLogger := async.Wrap(syncLogger, 1000)
+defer asyncLogger.Sync()
+
+// Non-blocking logging
+asyncLogger.Info("Server started", go_logs.Int("port", 8080))
+asyncLogger.Info("Connection established", go_logs.String("host", "db.example.com"))
+```
+
+## Configuration
+
+### Simple Wrapper
+
+```go
+// Wrap with buffer size only
+asyncLogger := async.Wrap(syncLogger, 1000)
+```
+
+### Custom Configuration
+
+```go
+import "time"
+
+config := async.Config{
+    BufferSize:      5000,              // Number of log entries to buffer
+    ShutdownTimeout: 10 * time.Second,  // Max wait time during shutdown
+}
+
+asyncLogger := async.WrapWithConfig(syncLogger, config)
+defer asyncLogger.Close()
+```
+
+### Default Configuration
+
+```go
+config := async.DefaultConfig()
+// BufferSize: 1000
+// ShutdownTimeout: 5 seconds
+```
+
+## API Reference
+
+### Config
+
+```go
+type Config struct {
+    // BufferSize is the number of log entries to buffer.
+    // When full, new entries are dropped.
+    BufferSize int
+
+    // ShutdownTimeout is the maximum time to wait for pending logs during shutdown.
+    // If timeout is reached, remaining logs are dropped.
+    ShutdownTimeout time.Duration
+}
+```
+
+### Wrap Functions
+
+<CodeGroup>
+
+```go Wrap()
+// Wrap creates an async logger with specified buffer size
+func Wrap(syncLogger go_logs.Logger, bufferSize int) *Logger
+```
+
+```go WrapWithConfig()
+// WrapWithConfig creates an async logger with custom configuration
+func WrapWithConfig(syncLogger go_logs.Logger, config Config) *Logger
+```
+
+</CodeGroup>
+
+### Logger Methods
+
+The async `Logger` implements the standard `go_logs.Logger` interface:
+
+```go
+// Logging methods (all non-blocking except Fatal)
+Log(level go_logs.Level, msg string, fields ...go_logs.Field)
+LogCtx(ctx context.Context, level go_logs.Level, msg string, fields ...go_logs.Field)
+
+Trace(msg string, fields ...go_logs.Field)
+Debug(msg string, fields ...go_logs.Field)
+Info(msg string, fields ...go_logs.Field)
+Warn(msg string, fields ...go_logs.Field)
+Error(msg string, fields ...go_logs.Field)
+Fatal(msg string, fields ...go_logs.Field)  // Synchronous to ensure message written
+
+// Child logger with fields
+With(fields ...go_logs.Field) go_logs.Logger
+
+// Level control
+SetLevel(level go_logs.Level)
+GetLevel() go_logs.Level
+
+// Synchronization
+Sync() error   // Wait for all pending entries to be written
+Close() error  // Graceful shutdown
+```
+
+## Important Behaviors
+
+### Buffer Overflow
+
+When the buffer is full, new log entries are **dropped** to prevent blocking:
+
+```go
+asyncLogger := async.Wrap(syncLogger, 10) // Small buffer for demo
+
+// If 10+ logs are queued, additional logs will be dropped
+for i := 0; i < 100; i++ {
+    asyncLogger.Info("Message", go_logs.Int("num", i))
+}
+
+// Check dropped count
+if metrics := asyncLogger.GetMetrics(); metrics != nil {
+    fmt.Printf("Dropped: %d\n", metrics.Dropped())
+}
+```
+
+### Fatal Logs
+
+`Fatal()` is **synchronous** to ensure the message is written before the program exits:
+
+```go
+// This will block until written, then exit the program
+asyncLogger.Fatal("Critical error", go_logs.Err(err))
+```
+
+### Graceful Shutdown
+
+Always call `Sync()` or `Close()` to flush pending logs:
+
+```go
+asyncLogger := async.Wrap(syncLogger, 1000)
+defer asyncLogger.Sync()  // Wait for pending logs (recommended)
+// or
+defer asyncLogger.Close() // Stop worker and flush
+
+asyncLogger.Info("Processing started")
+// ... application logic ...
+// On defer, pending logs will be written
+```
+
+## Performance Considerations
+
+### When to Use Async Logging
+
+**Use async logging when:**
+- Logging to slow outputs (network, remote services)
+- High log volume applications
+- Latency-sensitive operations
+- Logging in hot paths
+
+**Use sync logging when:**
+- Critical error handling
+- Low log volume
+- Fast local file/stdout logging
+- Guaranteed delivery required
+
+### Buffer Size Guidelines
+
+```go
+// Small application, low volume
+asyncLogger := async.Wrap(syncLogger, 100)
+
+// Medium application, moderate volume
+asyncLogger := async.Wrap(syncLogger, 1000)  // Default
+
+// High-throughput application
+asyncLogger := async.Wrap(syncLogger, 10000)
+
+// Very high volume with slow output
+config := async.Config{
+    BufferSize:      50000,
+    ShutdownTimeout: 30 * time.Second,
+}
+asyncLogger := async.WrapWithConfig(syncLogger, config)
+```
+
+## Complete Example
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/async"
+)
+
+func main() {
+    // Create sync logger with JSON formatter for production
+    syncLogger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+    )
+
+    // Wrap with async capabilities
+    config := async.Config{
+        BufferSize:      5000,
+        ShutdownTimeout: 10 * time.Second,
+    }
+    logger := async.WrapWithConfig(syncLogger, config)
+    defer logger.Sync()
+
+    // Create child logger with request context
+    reqLogger := logger.With(
+        go_logs.String("request_id", "req-123"),
+        go_logs.String("user_id", "user-456"),
+    )
+
+    // Non-blocking logging
+    reqLogger.Info("Request started")
+    
+    // Simulate processing
+    ctx := context.Background()
+    processRequest(ctx, reqLogger)
+
+    reqLogger.Info("Request completed")
+    
+    // Metrics
+    if metrics := logger.GetMetrics(); metrics != nil {
+        snapshot := metrics.Snapshot()
+        reqLogger.Info("Logging metrics",
+            go_logs.Int64("total", snapshot.Total),
+            go_logs.Int64("dropped", metrics.Dropped()),
+        )
+    }
+}
+
+func processRequest(ctx context.Context, logger go_logs.Logger) {
+    // High-volume logging without blocking
+    for i := 0; i < 1000; i++ {
+        logger.Debug("Processing item",
+            go_logs.Int("item", i),
+            go_logs.String("status", "ok"),
+        )
+    }
+}
+```
+
+## Thread Safety
+
+The async logger is fully thread-safe and can be used concurrently from multiple goroutines:
+
+```go
+asyncLogger := async.Wrap(syncLogger, 1000)
+
+// Safe to use from multiple goroutines
+for i := 0; i < 10; i++ {
+    go func(id int) {
+        asyncLogger.Info("Worker started", go_logs.Int("worker", id))
+    }(i)
+}
+```
+
+## See Also
+
+- [Core Logger](/core/logger) - Base logger interface
+- [Metrics](/advanced/metrics) - Monitoring dropped logs
+- [Configuration](/core/configuration) - Logger options

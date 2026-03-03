@@ -1,0 +1,354 @@
+---
+title: 'Basic Usage Examples'
+description: 'Get started with go_logs - basic logging patterns and common use cases'
+icon: 'book-open'
+---
+
+## Simple Logger Setup
+
+The most basic usage of go_logs with default settings:
+
+```go
+package main
+
+import (
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Create logger with defaults (InfoLevel, TextFormatter, stdout)
+    logger, _ := go_logs.New()
+    
+    logger.Info("Application started")
+    logger.Warn("This is a warning")
+    logger.Error("Something went wrong")
+}
+```
+
+**Output:**
+```
+[2026/03/03 10:30:00] INFO Application started
+[2026/03/03 10:30:00] WARN This is a warning
+[2026/03/03 10:30:00] ERROR Something went wrong
+```
+
+## Structured Logging with Fields
+
+Add context to your logs with typed fields:
+
+```go
+package main
+
+import (
+    "errors"
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    logger, _ := go_logs.New()
+    
+    // Log with structured fields
+    logger.Info("User login",
+        go_logs.String("username", "john"),
+        go_logs.String("ip", "192.168.1.100"),
+        go_logs.Int("attempt", 1),
+    )
+    
+    // Log errors with context
+    err := errors.New("connection timeout")
+    logger.Error("Database connection failed",
+        go_logs.Err(err),
+        go_logs.String("host", "db.example.com"),
+        go_logs.Int("port", 5432),
+        go_logs.Float64("retry_delay", 2.5),
+    )
+}
+```
+
+**Output:**
+```
+[2026/03/03 10:30:00] INFO User login username=john ip=192.168.1.100 attempt=1
+[2026/03/03 10:30:00] ERROR Database connection failed error=connection timeout host=db.example.com port=5432 retry_delay=2.5
+```
+
+## Log Levels and Filtering
+
+Control which logs are output based on severity:
+
+```go
+package main
+
+import (
+    "os"
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Create logger with custom level
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.WarnLevel),
+        go_logs.WithOutput(os.Stdout),
+    )
+    
+    // These are filtered out (below WarnLevel)
+    logger.Trace("Detailed trace")  // Not shown
+    logger.Debug("Debug info")       // Not shown
+    logger.Info("Application info")  // Not shown
+    
+    // These are logged (WarnLevel and above)
+    logger.Warn("Warning message")
+    logger.Error("Error message")
+}
+```
+
+## Dynamic Level Changes
+
+Change log level at runtime:
+
+```go
+package main
+
+import (
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+    )
+    
+    logger.Info("Starting application")  // Logged
+    logger.Debug("Debug info")            // Filtered out
+    
+    // Enable debug mode for troubleshooting
+    logger.SetLevel(go_logs.DebugLevel)
+    
+    logger.Debug("Now debug is enabled")  // Now logged
+    
+    // Check current level
+    if logger.GetLevel() == go_logs.DebugLevel {
+        logger.Info("Running in debug mode")
+    }
+}
+```
+
+## JSON Formatter for Production
+
+Use JSON output for log aggregation systems:
+
+```go
+package main
+
+import (
+    "os"
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Create logger with JSON formatter
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithOutput(os.Stdout),
+    )
+    
+    logger.Info("Connection established",
+        go_logs.String("host", "db.example.com"),
+        go_logs.Int("port", 5432),
+    )
+}
+```
+
+**Output:**
+```json
+{"timestamp":"2026-03-03T10:30:00Z","level":"INFO","message":"Connection established","fields":{"host":"db.example.com","port":5432}}
+```
+
+## Child Loggers with Inherited Fields
+
+Create child loggers that inherit parent fields:
+
+```go
+package main
+
+import (
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Parent logger with service info
+    logger, _ := go_logs.New()
+    
+    // Create child logger with request context
+    reqLogger := logger.With(
+        go_logs.String("request_id", "abc-123"),
+        go_logs.String("user_id", "user-456"),
+    )
+    
+    // All logs from child include inherited fields
+    reqLogger.Info("Request started")
+    reqLogger.Info("Processing payment",
+        go_logs.Float64("amount", 99.99),
+    )
+    reqLogger.Info("Request completed")
+}
+```
+
+**Output:**
+```
+[2026/03/03 10:30:00] INFO Request started request_id=abc-123 user_id=user-456
+[2026/03/03 10:30:00] INFO Processing payment request_id=abc-123 user_id=user-456 amount=99.99
+[2026/03/03 10:30:00] INFO Request completed request_id=abc-123 user_id=user-456
+```
+
+## File Output with Rotation
+
+Log to rotating files with automatic size management:
+
+```go
+package main
+
+import (
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Create logger with rotating file output
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+        // 100MB max size, keep 5 backup files
+    )
+    defer logger.Sync()
+    
+    logger.Info("Application started")
+    logger.Info("Logging to rotating file")
+}
+```
+
+## Redacting Sensitive Data
+
+Automatically mask sensitive fields in logs:
+
+```go
+package main
+
+import (
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Enable common redaction (password, token, etc.)
+    logger, _ := go_logs.New(
+        go_logs.WithCommonRedaction(),
+    )
+    
+    // Password and token fields are automatically masked
+    logger.Info("User authentication",
+        go_logs.String("username", "john"),
+        go_logs.String("password", "secret123"),  // Will be ***
+        go_logs.String("token", "abc-xyz-789"),    // Will be ***
+    )
+}
+```
+
+**Output:**
+```
+[2026/03/03 10:30:00] INFO User authentication username=john password=*** token=***
+```
+
+## Context Propagation
+
+Extract trace IDs from context for distributed tracing:
+
+```go
+package main
+
+import (
+    "context"
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    logger, _ := go_logs.New()
+    
+    // Create context with trace ID
+    ctx := go_logs.WithTraceID(context.Background(), "trace-789")
+    ctx = go_logs.WithSpanID(ctx, "span-101")
+    
+    // LogCtx extracts trace_id and span_id automatically
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Processing request")
+}
+```
+
+**Output:**
+```
+[2026/03/03 10:30:00] INFO Processing request trace_id=trace-789 span_id=span-101
+```
+
+## Complete Example
+
+Putting it all together:
+
+```go
+package main
+
+import (
+    "context"
+    "errors"
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Configure production logger
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+        go_logs.WithCommonRedaction(),
+    )
+    defer logger.Sync()
+    
+    // Log application start
+    logger.Info("Application starting",
+        go_logs.String("version", "1.0.0"),
+        go_logs.String("environment", "production"),
+    )
+    
+    // Simulate request handling
+    handleRequest(logger)
+    
+    logger.Info("Application shutting down")
+}
+
+func handleRequest(logger go_logs.Logger) {
+    // Create request logger with context
+    ctx := go_logs.WithTraceID(context.Background(), "req-abc-123")
+    reqLogger := logger.With(
+        go_logs.String("request_id", "req-abc-123"),
+        go_logs.String("path", "/api/users"),
+    )
+    
+    reqLogger.LogCtx(ctx, go_logs.InfoLevel, "Request received")
+    
+    // Simulate error
+    err := errors.New("database connection failed")
+    if err != nil {
+        reqLogger.Error("Request failed",
+            go_logs.Err(err),
+            go_logs.Int("status_code", 500),
+        )
+    }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Web Server Logging" icon="server" href="/examples/web-server">
+    Learn how to integrate go_logs with HTTP servers
+  </Card>
+  <Card title="Production Setup" icon="rocket" href="/examples/production-setup">
+    Configure go_logs for production environments
+  </Card>
+</CardGroup>

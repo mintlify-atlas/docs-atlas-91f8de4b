@@ -1,0 +1,547 @@
+---
+title: Migrating from v2 to v3
+description: Complete guide for migrating from go_logs v2 to v3 with backward compatibility
+---
+
+go_logs v3 introduces significant improvements while maintaining **100% backward compatibility** with v2. This guide helps you migrate at your own pace.
+
+## What's new in v3
+
+<CardGroup cols={2}>
+  <Card title="Structured logging" icon="code">
+    Type-safe fields instead of printf-style formatting
+  </Card>
+  <Card title="Child loggers" icon="diagram-project">
+    Pre-configured loggers with inherited fields
+  </Card>
+  <Card title="Context support" icon="link">
+    Automatic trace_id extraction from context
+  </Card>
+  <Card title="Dual formatters" icon="brackets-curly">
+    TextFormatter for dev, JSONFormatter for production
+  </Card>
+  <Card title="File rotation" icon="rotate">
+    Automatic log rotation by size with backup management
+  </Card>
+  <Card title="Extensible hooks" icon="plug">
+    Pluggable system for Slack, Sentry, metrics
+  </Card>
+  <Card title="Data redaction" icon="shield">
+    Automatic masking of sensitive fields
+  </Card>
+  <Card title="Multiple instances" icon="layer-group">
+    Create independent loggers with different configs
+  </Card>
+</CardGroup>
+
+## Migration strategy
+
+We recommend a **3-phase gradual migration**:
+
+<Steps>
+  <Step title="Phase 1: Drop-in replacement">
+    Update dependency to v3, run existing tests, deploy and monitor. **No code changes required.**
+  </Step>
+  
+  <Step title="Phase 2: Adopt new features incrementally">
+    - Use v3 API for new code
+    - Migrate critical paths to structured logging
+    - Add child loggers for request tracing
+    - Enable JSON formatter for production
+  </Step>
+  
+  <Step title="Phase 3: Full migration (optional)">
+    - Replace all v2 functions with v3 API
+    - Use structured fields throughout
+    - Remove unused v2 functions
+  </Step>
+</Steps>
+
+## Backward compatibility
+
+<Note>
+All v2 code continues to work without changes in v3.
+</Note>
+
+```go
+// v2 code - works in v3 without modification
+go_logs.Init()
+defer go_logs.Close()
+
+go_logs.InfoLog("Server started")
+go_logs.Errorf("Connection failed: %v", err)
+```
+
+## Quick start
+
+<Tabs>
+  <Tab title="New projects">
+    Use v3 API from the start:
+
+    ```go
+    package main
+
+    import "github.com/drossan/go_logs"
+
+    func main() {
+        // Create logger with structured fields
+        logger, _ := go_logs.New(
+            go_logs.WithLevel(go_logs.InfoLevel),
+            go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        )
+
+        // Log with structured fields
+        logger.Info("Server started",
+            go_logs.String("host", "localhost"),
+            go_logs.Int("port", 8080),
+            go_logs.Bool("debug", false),
+        )
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Existing projects">
+    No immediate changes required - v2 code works as-is:
+
+    ```go
+    // This continues to work in v3
+    go_logs.Init()
+    defer go_logs.Close()
+
+    go_logs.InfoLog("Application started")
+    go_logs.Errorf("Error: %v", err)
+    ```
+  </Tab>
+</Tabs>
+
+## Step-by-step migration
+
+### Step 1: Update dependency
+
+```bash
+# Update to v3
+go get -u github.com/drossan/go_logs@v3
+go mod tidy
+```
+
+### Step 2: Verify existing tests
+
+```bash
+# Run your existing test suite
+go test ./...
+
+# All v2 tests should pass without changes
+```
+
+### Step 3: Migrate to v3 API (gradual)
+
+#### Replace printf-style logging
+
+<CodeGroup>
+```go Before (v2)
+go_logs.Infof("User %s (ID: %d) logged in from %s", username, userID, ip)
+```
+
+```go After (v3)
+logger.Info("user_logged_in",
+    go_logs.String("username", username),
+    go_logs.Int("user_id", userID),
+    go_logs.String("ip", ip),
+)
+```
+</CodeGroup>
+
+**Benefits:**
+- Structured fields are queryable in log aggregators (ELK, Splunk)
+- Type-safe (compile-time checks)
+- No format string errors
+
+#### Use child loggers for context
+
+<CodeGroup>
+```go Before (v2)
+go_logs.Infof("Processing request for user %s", username)
+// ... many lines of code ...
+go_logs.Infof("Request completed successfully")
+```
+
+```go After (v3)
+// Create child logger with request context
+reqLogger := logger.With(
+    go_logs.String("request_id", reqID),
+    go_logs.String("user_id", userID),
+)
+
+reqLogger.Info("Processing request")
+// ... many lines of code ...
+reqLogger.Info("Request completed successfully")
+```
+</CodeGroup>
+
+**Benefits:**
+- All logs automatically include request_id and user_id
+- No need to pass context manually
+- Better traceability
+
+#### Use context for distributed tracing
+
+<CodeGroup>
+```go Before (v2)
+// Context accepted but ignored
+go_logs.InfoLogCtx(ctx, "Processing request")
+```
+
+```go After (v3)
+// Add trace_id to context
+ctx = go_logs.WithTraceID(ctx, "trace-abc-123")
+
+// Trace_id automatically extracted and logged
+logger.LogCtx(ctx, go_logs.InfoLevel, "Processing request")
+// Output: INFO Processing request trace_id=trace-abc-123
+```
+</CodeGroup>
+
+#### Enable JSON formatter for production
+
+<CodeGroup>
+```go Before (v2)
+// Only text format available
+go_logs.InfoLog("Server started")
+// Output: [INFO] Server started
+```
+
+```go After (v3)
+// Set environment variable: LOG_FORMAT=json
+
+// Or configure programmatically
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+)
+
+logger.Info("Server started", go_logs.Int("port", 8080))
+// Output: {"level":"INFO","message":"Server started","timestamp":"2025-02-28T12:00:00Z","fields":{"port":8080}}
+```
+</CodeGroup>
+
+#### Use rotating file writer
+
+<CodeGroup>
+```bash Before (v2)
+# File grows indefinitely
+export SAVE_LOG_FILE=1
+export LOG_FILE_NAME=app.log
+```
+
+```bash After (v3)
+# Automatic rotation by size
+export SAVE_LOG_FILE=1
+export LOG_FILE_NAME=app.log
+export LOG_MAX_SIZE=100      # Rotate at 100MB
+export LOG_MAX_BACKUPS=3     # Keep 3 backups
+```
+</CodeGroup>
+
+**Result:**
+- `app.log` - Current log file
+- `app.log.1` - First backup
+- `app.log.2` - Second backup
+- `app.log.3` - Third backup
+- Older backups automatically deleted
+
+#### Enable data redaction
+
+<CodeGroup>
+```go Before (v2)
+// Risk: Passwords logged in plain text
+go_logs.Infof("User login: %s, password: %s", username, password)
+```
+
+```go After (v3)
+// Enable redaction
+logger, _ := go_logs.New(
+    go_logs.WithCommonRedaction(),  // Masks password, token, secret, etc.
+)
+
+logger.Info("User login",
+    go_logs.String("username", username),
+    go_logs.String("password", password),  // Automatically masked
+)
+// Output: INFO User login username=john password=***
+```
+</CodeGroup>
+
+## Configuration changes
+
+### Environment variables
+
+#### v2 variables (still supported)
+
+```bash
+# File logging
+SAVE_LOG_FILE=1
+LOG_FILE_NAME=app.log
+LOG_FILE_PATH=/var/log
+
+# Slack notifications (legacy)
+NOTIFICATIONS_SLACK_ENABLED=1
+NOTIFICATION_FATAL_LOG=1
+NOTIFICATION_ERROR_LOG=1
+NOTIFICATION_WARNING_LOG=1
+NOTIFICATION_INFO_LOG=1
+NOTIFICATION_SUCCESS_LOG=1
+
+# Slack credentials
+SLACK_TOKEN=xoxb-...
+SLACK_CHANNEL_ID=C1234567890
+```
+
+#### v3 new variables
+
+```bash
+# Log level (replaces NOTIFICATION_*_LOG)
+LOG_LEVEL=info          # trace, debug, info, warn, error, fatal, silent
+
+# Output format
+LOG_FORMAT=json         # text (default) or json
+
+# File rotation
+LOG_MAX_SIZE=100        # MB (default: 100)
+LOG_MAX_BACKUPS=3       # Number of backups (default: 3)
+
+# Data redaction
+LOG_REDACT_KEYS=password,token,secret,api_key
+```
+
+<Warning>
+The legacy notification system takes precedence when both are configured. To use the new system, don't set `NOTIFICATION_*_LOG` variables.
+</Warning>
+
+## Complete migration example
+
+<Tabs>
+  <Tab title="v2 (Original)">
+    ```go
+    package main
+
+    import "github.com/drossan/go_logs"
+
+    func handleRequest(userID int, username string) {
+        go_logs.Infof("User %s (ID: %d) logged in", username, userID)
+
+        if err := processUser(userID); err != nil {
+            go_logs.Errorf("Failed to process user %d: %v", userID, err)
+            return
+        }
+
+        go_logs.Infof("User %d processed successfully", userID)
+    }
+    ```
+  </Tab>
+  
+  <Tab title="v3 (Drop-in)">
+    ```go
+    package main
+
+    import "github.com/drossan/go_logs"
+
+    func handleRequest(userID int, username string) {
+        // No code changes - works as-is
+        go_logs.Infof("User %s (ID: %d) logged in", username, userID)
+
+        if err := processUser(userID); err != nil {
+            go_logs.Errorf("Failed to process user %d: %v", userID, err)
+            return
+        }
+
+        go_logs.Infof("User %d processed successfully", userID)
+    }
+    ```
+  </Tab>
+  
+  <Tab title="v3 (Gradual)">
+    ```go
+    package main
+
+    import "github.com/drossan/go_logs"
+
+    var logger, _ = go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    )
+
+    func handleRequest(userID int, username string) {
+        // Mix of v2 and v3 API
+        logger.Info("user_logged_in",
+            go_logs.String("username", username),
+            go_logs.Int("user_id", userID),
+        )
+
+        if err := processUser(userID); err != nil {
+            // Still using v2 for error handling
+            go_logs.Errorf("Failed to process user %d: %v", userID, err)
+            return
+        }
+
+        logger.Info("user_processed",
+            go_logs.Int("user_id", userID),
+        )
+    }
+    ```
+  </Tab>
+  
+  <Tab title="v3 (Full)">
+    ```go
+    package main
+
+    import "github.com/drossan/go_logs"
+
+    var logger, _ = go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    )
+
+    func handleRequest(userID int, username string) {
+        // Fully migrated to v3
+        logger.Info("user_logged_in",
+            go_logs.String("username", username),
+            go_logs.Int("user_id", userID),
+        )
+
+        if err := processUser(userID); err != nil {
+            logger.Error("user_processing_failed",
+                go_logs.Int("user_id", userID),
+                go_logs.Err(err),
+            )
+            return
+        }
+
+        logger.Info("user_processed",
+            go_logs.Int("user_id", userID),
+        )
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Best practices
+
+### Use structured fields
+
+<CodeGroup>
+```go ❌ Bad
+logger.Infof("User %s logged in from %s at %s", user, ip, time)
+```
+
+```go ✅ Good
+logger.Info("user_logged_in",
+    go_logs.String("username", user),
+    go_logs.String("ip", ip),
+    go_logs.String("timestamp", time.Format(time.RFC3339)),
+)
+```
+</CodeGroup>
+
+### Use child loggers for context
+
+<CodeGroup>
+```go ❌ Bad
+logger.Info("Request", go_logs.String("request_id", reqID))
+logger.Info("Processing", go_logs.String("request_id", reqID))
+logger.Info("Complete", go_logs.String("request_id", reqID))
+```
+
+```go ✅ Good
+reqLogger := logger.With(go_logs.String("request_id", reqID))
+reqLogger.Info("Request")
+reqLogger.Info("Processing")
+reqLogger.Info("Complete")
+```
+</CodeGroup>
+
+### Enable redaction for sensitive data
+
+<CodeGroup>
+```go ❌ Bad
+logger.Info("Login",
+    go_logs.String("username", user),
+    go_logs.String("password", pass),  // Password in plain text!
+)
+```
+
+```go ✅ Good
+logger, _ := go_logs.New(go_logs.WithCommonRedaction())
+logger.Info("Login",
+    go_logs.String("username", user),
+    go_logs.String("password", pass),  // Automatically masked as ***
+)
+```
+</CodeGroup>
+
+## FAQ
+
+<AccordionGroup>
+  <Accordion title="Do I need to change my code to use v3?">
+    No! v3 is 100% backward compatible with v2. Your existing code will work without changes.
+  </Accordion>
+
+  <Accordion title="Should I migrate to the v3 API?">
+    We recommend gradual migration:
+    - Keep v2 code for existing functionality
+    - Use v3 API for new features
+    - Migrate critical paths to structured logging
+    - Migrate remaining code over time
+  </Accordion>
+
+  <Accordion title="Will v2 functions be removed?">
+    No. v2 functions are permanently supported for backward compatibility.
+  </Accordion>
+
+  <Accordion title="Can I mix v2 and v3 APIs?">
+    Yes! You can use both APIs in the same application:
+    ```go
+    // v2 API
+    go_logs.InfoLog("Legacy code")
+    
+    // v3 API
+    logger.Info("New code", go_logs.String("key", "value"))
+    ```
+  </Accordion>
+
+  <Accordion title="How do I enable JSON logging?">
+    Set environment variable:
+    ```bash
+    export LOG_FORMAT=json
+    ```
+    
+    Or configure programmatically:
+    ```go
+    logger, _ := go_logs.New(
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="What's the performance impact of v3?">
+    v3 is designed for high performance:
+    - Structured fields: < 10ns per field
+    - Fast-path filtering: < 5ns
+    - No significant overhead vs v2 for simple cases
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Backward compatibility" icon="shield-check" href="/migration/backward-compatibility">
+    Learn about v2 API compatibility
+  </Card>
+  <Card title="Core concepts" icon="book" href="/core/structured-logging">
+    Explore v3 structured logging
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/options">
+    Configure your logger
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/basic-usage">
+    See practical examples
+  </Card>
+</CardGroup>

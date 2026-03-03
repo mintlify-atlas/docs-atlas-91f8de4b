@@ -1,0 +1,546 @@
+---
+title: Output Destinations
+description: Configure output destinations including files, stdout, and multiple simultaneous outputs
+---
+
+## Overview
+
+go_logs supports flexible output configuration through the `io.Writer` interface. You can log to:
+- Standard output (console)
+- Standard error
+- Files with automatic rotation
+- Multiple destinations simultaneously
+- Custom writers
+
+## Standard Output
+
+### Console Output (stdout)
+
+Log to standard output for development and containerized environments.
+
+```go
+import (
+    "os"
+    "github.com/drossan/go_logs"
+)
+
+logger, _ := go_logs.New(
+    go_logs.WithOutput(os.Stdout),
+    go_logs.WithFormatter(go_logs.NewTextFormatter()),
+)
+
+logger.Info("Application started")
+```
+
+### Standard Error (stderr)
+
+Log to standard error to separate logs from application output.
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithOutput(os.Stderr),
+)
+```
+
+### Discard Output
+
+Disable all output (useful for testing).
+
+```go
+import "io"
+
+logger, _ := go_logs.New(
+    go_logs.WithOutput(io.Discard),
+)
+```
+
+## File Output
+
+### Simple File Output
+
+Write logs to a file without rotation.
+
+```go
+import "os"
+
+file, err := os.OpenFile("/var/log/app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+if err != nil {
+    panic(err)
+}
+defer file.Close()
+
+logger, _ := go_logs.New(
+    go_logs.WithOutput(file),
+)
+```
+
+### Rotating File Writer
+
+Automatically rotate log files when they reach a size limit.
+
+```go
+go_logs.WithRotatingFile(filename string, maxSizeMB int, maxBackups int) Option
+```
+
+**Parameters:**
+- `filename`: Path to log file (e.g., `/var/log/app.log`)
+- `maxSizeMB`: Maximum size in megabytes before rotation (e.g., `100`)
+- `maxBackups`: Maximum number of backup files to keep (e.g., `5`)
+
+**Example:**
+```go
+logger, err := go_logs.New(
+    go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+)
+if err != nil {
+    panic(err)
+}
+defer logger.Sync()
+
+logger.Info("Application started")
+```
+
+**File Structure:**
+```
+/var/log/
+├── app.log       (current, grows to 100MB)
+├── app.log.1     (most recent backup)
+├── app.log.2
+├── app.log.3
+├── app.log.4
+└── app.log.5     (oldest, deleted on next rotation)
+```
+
+**Manual Rotation:**
+```go
+writer, _ := go_logs.NewRotatingFileWriter("/var/log/app.log", 100, 5)
+logger, _ := go_logs.New(go_logs.WithOutput(writer))
+
+// Force rotation (e.g., on SIGHUP)
+writer.Rotate()
+```
+
+## Advanced File Rotation
+
+### Time-Based Rotation
+
+Rotate logs based on time instead of size.
+
+```go
+go_logs.WithRotatingFileEnhanced(config RotatingFileConfig) Option
+```
+
+**RotatingFileConfig:**
+```go
+type RotatingFileConfig struct {
+    Filename     string           // Path to log file
+    MaxSizeMB    int             // Max size before rotation (for RotateSize)
+    MaxBackups   int             // Max number of backups to keep
+    RotationType RotationType    // Size, Daily, or Hourly
+    Compress     bool            // Enable gzip compression
+    MaxAge       int             // Max days to keep old files (0 = no limit)
+    LocalTime    bool            // Use local time vs UTC for rotation
+}
+```
+
+**Rotation Types:**
+- `RotateSize`: Rotate when file exceeds `MaxSizeMB` (default)
+- `RotateDaily`: Rotate at midnight (00:00)
+- `RotateHourly`: Rotate at the start of each hour
+
+### Daily Rotation
+
+Rotate logs once per day at midnight.
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+        Filename:     "/var/log/app.log",
+        MaxSizeMB:    100,
+        MaxBackups:   30,  // Keep 30 days
+        RotationType: go_logs.RotateDaily,
+        Compress:     true,  // Gzip old files
+        MaxAge:       30,    // Delete files older than 30 days
+        LocalTime:    true,  // Use local timezone
+    }),
+)
+```
+
+**File Structure:**
+```
+/var/log/
+├── app.log                        (current)
+├── app-2026-03-02_00-00-00.log.gz (yesterday, compressed)
+├── app-2026-03-01_00-00-00.log.gz
+└── app-2026-02-28_00-00-00.log.gz
+```
+
+### Hourly Rotation
+
+Rotate logs every hour.
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+        Filename:     "/var/log/app.log",
+        MaxSizeMB:    100,
+        MaxBackups:   24,  // Keep last 24 hours
+        RotationType: go_logs.RotateHourly,
+        Compress:     true,
+        LocalTime:    true,
+    }),
+)
+```
+
+### Size-Based with Compression
+
+Rotate by size and compress old files to save disk space.
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+        Filename:     "/var/log/app.log",
+        MaxSizeMB:    100,
+        MaxBackups:   5,
+        RotationType: go_logs.RotateSize,
+        Compress:     true,  // Compress rotated files
+    }),
+)
+```
+
+**File Structure:**
+```
+/var/log/
+├── app.log       (current, uncompressed)
+├── app.log.1.gz  (compressed backup)
+├── app.log.2.gz
+├── app.log.3.gz
+├── app.log.4.gz
+└── app.log.5.gz
+```
+
+## Multiple Output Destinations
+
+### Multi-Writer
+
+Write logs to multiple destinations simultaneously (e.g., file + console).
+
+```go
+import (
+    "os"
+    "github.com/drossan/go_logs"
+)
+
+file, _ := go_logs.NewRotatingFileWriter("/var/log/app.log", 100, 5)
+multi := go_logs.NewMultiWriter(file, os.Stdout)
+
+logger, _ := go_logs.New(
+    go_logs.WithOutput(multi),
+)
+
+// Logs go to both file AND console
+logger.Info("Application started")
+```
+
+### WithMultiOutput Option
+
+Convenience option for multiple outputs.
+
+```go
+go_logs.WithMultiOutput(writers ...io.Writer) Option
+```
+
+**Example:**
+```go
+file, _ := go_logs.NewRotatingFileWriter("/var/log/app.log", 100, 5)
+
+logger, _ := go_logs.New(
+    go_logs.WithMultiOutput(file, os.Stdout),
+)
+```
+
+### Different Formatters per Output
+
+Use different formats for different outputs (e.g., JSON for files, text for console).
+
+```go
+import (
+    "os"
+    "github.com/drossan/go_logs"
+)
+
+// Console logger with text format
+consoleLogger, _ := go_logs.New(
+    go_logs.WithOutput(os.Stdout),
+    go_logs.WithFormatter(go_logs.NewTextFormatter()),
+    go_logs.WithLevel(go_logs.DebugLevel),
+)
+
+// File logger with JSON format
+fileLogger, _ := go_logs.New(
+    go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithLevel(go_logs.InfoLevel),
+)
+
+// Use both in your application
+func logMessage(msg string) {
+    consoleLogger.Info(msg)  // Human-readable on console
+    fileLogger.Info(msg)     // Structured JSON in file
+}
+```
+
+### Dynamic Writers
+
+Add or remove writers at runtime.
+
+```go
+multi := go_logs.NewMultiWriter(os.Stdout)
+logger, _ := go_logs.New(go_logs.WithOutput(multi))
+
+// Add file output later
+file, _ := go_logs.NewRotatingFileWriter("/var/log/app.log", 100, 5)
+multi.AddWriter(file)
+
+// Remove console output
+multi.RemoveWriter(os.Stdout)
+```
+
+### Error Handling for Multi-Writer
+
+Handle errors from individual writers.
+
+```go
+multi := go_logs.NewWriterWithErrorHandler(
+    func(err error) {
+        // Log writer failures to stderr
+        fmt.Fprintf(os.Stderr, "Log writer error: %v\n", err)
+    },
+    file, os.Stdout,
+)
+
+logger, _ := go_logs.New(go_logs.WithOutput(multi))
+```
+
+## Environment-Based Configuration
+
+Load output configuration from environment variables.
+
+```go
+import (
+    "os"
+    "strconv"
+    "github.com/drossan/go_logs"
+)
+
+func newLoggerFromEnv() (go_logs.Logger, error) {
+    saveToFile, _ := strconv.ParseBool(os.Getenv("SAVE_LOG_FILE"))
+    
+    if !saveToFile {
+        // Console only
+        return go_logs.New(
+            go_logs.WithOutput(os.Stdout),
+        )
+    }
+    
+    // File output with rotation
+    filename := os.Getenv("LOG_FILE_PATH") + "/" + os.Getenv("LOG_FILE_NAME")
+    maxSize, _ := strconv.Atoi(os.Getenv("LOG_MAX_SIZE"))
+    maxBackups, _ := strconv.Atoi(os.Getenv("LOG_MAX_BACKUPS"))
+    
+    if maxSize == 0 {
+        maxSize = 100 // default
+    }
+    if maxBackups == 0 {
+        maxBackups = 5 // default
+    }
+    
+    return go_logs.New(
+        go_logs.WithRotatingFile(filename, maxSize, maxBackups),
+    )
+}
+```
+
+**Environment Variables:**
+```bash
+export SAVE_LOG_FILE=1
+export LOG_FILE_NAME=app.log
+export LOG_FILE_PATH=/var/log
+export LOG_MAX_SIZE=100
+export LOG_MAX_BACKUPS=5
+```
+
+## Production Configuration Examples
+
+### Containerized Application (Docker/Kubernetes)
+
+```go
+// Log to stdout for container log collection
+logger, _ := go_logs.New(
+    go_logs.WithOutput(os.Stdout),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithLevel(go_logs.InfoLevel),
+)
+```
+
+### Traditional Server
+
+```go
+// Log to rotating files with compression
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+        Filename:     "/var/log/myapp/app.log",
+        MaxSizeMB:    100,
+        MaxBackups:   30,
+        RotationType: go_logs.RotateDaily,
+        Compress:     true,
+        MaxAge:       90,  // Keep 90 days
+        LocalTime:    true,
+    }),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+)
+```
+
+### Development
+
+```go
+// Console + file for development
+file, _ := go_logs.NewRotatingFileWriter("./logs/dev.log", 50, 3)
+
+logger, _ := go_logs.New(
+    go_logs.WithMultiOutput(file, os.Stdout),
+    go_logs.WithFormatter(go_logs.NewTextFormatter()),
+    go_logs.WithLevel(go_logs.DebugLevel),
+)
+```
+
+### High-Volume Application
+
+```go
+// Hourly rotation with compression to manage disk space
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+        Filename:     "/var/log/myapp/app.log",
+        MaxSizeMB:    500,  // Large files
+        MaxBackups:   48,   // Keep 2 days of hourly logs
+        RotationType: go_logs.RotateHourly,
+        Compress:     true,
+        MaxAge:       7,    // Delete after 1 week
+        LocalTime:    true,
+    }),
+)
+```
+
+## Custom Writers
+
+Implement custom output destinations by implementing `io.Writer`.
+
+```go
+import "io"
+
+// Custom writer that sends logs to a monitoring service
+type MonitoringWriter struct {
+    client *MonitoringClient
+}
+
+func (w *MonitoringWriter) Write(p []byte) (n int, err error) {
+    // Send to monitoring service
+    err = w.client.SendLog(string(p))
+    if err != nil {
+        return 0, err
+    }
+    return len(p), nil
+}
+
+// Use custom writer
+monitoring := &MonitoringWriter{client: myClient}
+logger, _ := go_logs.New(
+    go_logs.WithOutput(monitoring),
+)
+```
+
+## Flushing and Cleanup
+
+Always flush logs before application shutdown.
+
+```go
+func main() {
+    logger, _ := go_logs.New(
+        go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+    )
+    
+    // Ensure logs are flushed on exit
+    defer logger.Sync()
+    
+    logger.Info("Application started")
+    // ... application logic ...
+    logger.Info("Application shutting down")
+}
+```
+
+## Performance Considerations
+
+### Buffering
+
+Rotating file writers use buffered I/O for performance:
+- Default buffer: 4KB
+- Automatic flush on rotation
+- Manual flush via `Sync()`
+
+### Rotation Overhead
+
+- **Size-based rotation**: ~1-5ms per rotation
+- **Time-based rotation**: Checked on each write, minimal overhead
+- **Compression**: ~10-50ms depending on file size
+
+### Best Practices
+
+1. **Use JSON format** for production (easier to parse)
+2. **Enable compression** to save disk space
+3. **Set MaxAge** to prevent disk full errors
+4. **Flush on shutdown** with `defer logger.Sync()`
+5. **Use MultiWriter** sparingly (adds overhead)
+
+## Troubleshooting
+
+### Permission Errors
+
+```go
+// Ensure directory exists and has correct permissions
+logger, err := go_logs.New(
+    go_logs.WithRotatingFile("/var/log/myapp/app.log", 100, 5),
+)
+if err != nil {
+    // Check: directory exists, user has write permission
+    panic(err)
+}
+```
+
+### Disk Full
+
+```go
+// Set MaxAge and MaxBackups to limit disk usage
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+        Filename:   "/var/log/app.log",
+        MaxSizeMB:  100,
+        MaxBackups: 10,   // Limit backups
+        MaxAge:     7,    // Delete after 1 week
+        Compress:   true, // Save space
+    }),
+)
+```
+
+### Lost Logs on Crash
+
+```go
+// Flush after important operations
+logger.Error("Critical error", go_logs.Err(err))
+logger.Sync()  // Ensure error is written before crash
+```
+
+## Next Steps
+
+- [Configuration Options](/configuration/options) - All available options
+- [Environment Variables](/configuration/environment-variables) - Environment-based config
+- [Formatters](/core-concepts/formatters) - Text and JSON formatting

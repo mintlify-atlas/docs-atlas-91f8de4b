@@ -1,0 +1,218 @@
+---
+title: 'Log Levels'
+description: 'Syslog-style log levels and level management functions'
+---
+
+## Level
+
+Level represents the log level using syslog-style numeric values. This numeric representation enables fast-path threshold-based filtering.
+
+### Type Definition
+
+```go
+type Level int
+```
+
+### Level Constants
+
+Log levels follow the syslog convention with numeric values:
+
+<ParamField path="TraceLevel" type="Level" default="10">
+  Extremely detailed, high-volume logging for detailed execution traces
+</ParamField>
+
+<ParamField path="DebugLevel" type="Level" default="20">
+  Detailed diagnostic information for troubleshooting
+</ParamField>
+
+<ParamField path="SuccessLevel" type="Level" default="25">
+  Successful operations (between Debug and Info). Maintained for v2 backward compatibility
+</ParamField>
+
+<ParamField path="InfoLevel" type="Level" default="30">
+  General informational messages about application progress
+</ParamField>
+
+<ParamField path="WarnLevel" type="Level" default="40">
+  Warning messages for potentially harmful situations
+</ParamField>
+
+<ParamField path="ErrorLevel" type="Level" default="50">
+  Error events that might still allow the application to continue running
+</ParamField>
+
+<ParamField path="FatalLevel" type="Level" default="60">
+  Critical errors that will terminate the application
+</ParamField>
+
+<ParamField path="SilentLevel" type="Level" default="0">
+  Disables all logging output
+</ParamField>
+
+### Syslog-Style Filtering
+
+The numeric level system uses syslog-style filtering: a message is logged if its level value is **greater than or equal to** the threshold level.
+
+**Example:**
+- Threshold: `WarnLevel` (40)
+- Logged: `ErrorLevel` (50), `FatalLevel` (60)
+- Filtered out: `InfoLevel` (30), `DebugLevel` (20), `TraceLevel` (10)
+
+---
+
+## Methods
+
+### ShouldLog
+
+Returns true if this level should be logged given the threshold. This is the public version for use in hooks and other external code.
+
+```go
+func (l Level) ShouldLog(threshold Level) bool
+```
+
+<ParamField path="threshold" type="Level" required>
+  The minimum level threshold
+</ParamField>
+
+**Returns:** `true` if this level meets or exceeds the threshold, `false` otherwise.
+
+#### Example
+
+```go
+if entry.Level.ShouldLog(ErrorLevel) {
+    // Send to monitoring system
+}
+```
+
+---
+
+### String
+
+Returns the string representation of the log level. Returns "UNKNOWN" for undefined levels.
+
+```go
+func (l Level) String() string
+```
+
+**Returns:** String representation of the level ("TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL", "SUCCESS", "SILENT", or "UNKNOWN").
+
+#### Example
+
+```go
+level := go_logs.InfoLevel
+fmt.Println(level.String()) // Output: "INFO"
+```
+
+---
+
+## Functions
+
+### ParseLevel
+
+Converts a string to a Level. Case-insensitive. Returns `InfoLevel` as default for unknown strings.
+
+```go
+func ParseLevel(levelStr string) Level
+```
+
+<ParamField path="levelStr" type="string" required>
+  The level string to parse (case-insensitive)
+</ParamField>
+
+**Returns:** The corresponding `Level`. Returns `InfoLevel` for unknown strings.
+
+#### Supported Values
+
+- `"trace"` → `TraceLevel`
+- `"debug"` → `DebugLevel`
+- `"info"` → `InfoLevel`
+- `"warn"`, `"warning"` → `WarnLevel`
+- `"error"` → `ErrorLevel`
+- `"fatal"` → `FatalLevel`
+- `"success"` → `SuccessLevel`
+- `"silent"`, `"none"`, `"disable"` → `SilentLevel`
+- Any other value → `InfoLevel` (default)
+
+#### Example
+
+```go
+import "os"
+
+levelStr := os.Getenv("LOG_LEVEL")
+level := go_logs.ParseLevel(levelStr)
+logger.SetLevel(level)
+```
+
+---
+
+## Performance
+
+Log level filtering is optimized for performance:
+
+- **Fast-path filtering**: ~0.32 ns/op (target: < 5 ns)
+- **Zero allocations**: Level comparisons don't allocate memory
+- **Critical optimization**: Level checking must be extremely fast as it runs on every log call
+
+---
+
+## Usage Examples
+
+### Setting Log Level
+
+```go
+import "github.com/drossan/go_logs"
+
+// Create logger with specific level
+logger := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel),
+)
+
+// Change level dynamically
+logger.SetLevel(go_logs.WarnLevel)
+
+// Get current level
+currentLevel := logger.GetLevel()
+fmt.Printf("Current level: %s\n", currentLevel.String())
+```
+
+### Environment-Based Configuration
+
+```go
+import (
+    "os"
+    "github.com/drossan/go_logs"
+)
+
+// Parse level from environment variable
+levelStr := os.Getenv("LOG_LEVEL") // e.g., "debug", "info", "warn"
+level := go_logs.ParseLevel(levelStr)
+
+logger := go_logs.New(
+    go_logs.WithLevel(level),
+)
+```
+
+### Conditional Logging in Hooks
+
+```go
+type MetricsHook struct{}
+
+func (h *MetricsHook) Run(entry *go_logs.Entry) error {
+    // Only send errors and fatals to monitoring
+    if entry.Level.ShouldLog(go_logs.ErrorLevel) {
+        // Send to monitoring system
+        sendToMonitoring(entry)
+    }
+    return nil
+}
+```
+
+---
+
+## Best Practices
+
+1. **Production**: Use `InfoLevel` or `WarnLevel` to reduce log volume
+2. **Development**: Use `DebugLevel` or `TraceLevel` for detailed diagnostics
+3. **Environment variables**: Use `LOG_LEVEL` environment variable for configuration
+4. **Performance**: Level filtering is optimized, so don't worry about performance impact
+5. **Silent mode**: Use `SilentLevel` to completely disable logging when needed

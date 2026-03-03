@@ -1,0 +1,185 @@
+---
+title: 'Field and FieldType'
+description: 'Structured key-value pairs for logging with type information'
+---
+
+## Field
+
+Field represents a structured key-value pair for logging. Fields are designed to be zero-allocation - they are simple structs that can be created and passed around efficiently.
+
+The valueType allows the formatter to handle different types appropriately (e.g., quoting strings, formatting numbers, handling errors specially).
+
+### Type Definition
+
+```go
+type Field struct {
+    key       string
+    valueType FieldType
+    value     interface{}
+}
+```
+
+### Methods
+
+#### Key
+
+Returns the field's key. This is useful for formatters and hooks that need to inspect fields.
+
+```go
+func (f Field) Key() string
+```
+
+**Returns:** The field's key as a string.
+
+---
+
+#### Type
+
+Returns the field's value type. This is useful for type-specific formatting.
+
+```go
+func (f Field) Type() FieldType
+```
+
+**Returns:** The field's `FieldType`.
+
+---
+
+#### Value
+
+Returns the field's value. This is useful for formatters and hooks that need to access the value.
+
+```go
+func (f Field) Value() interface{}
+```
+
+**Returns:** The field's value as an `interface{}`.
+
+---
+
+#### StringValue
+
+Returns the string representation of the field's value. For non-string types, it returns an empty string.
+
+```go
+func (f Field) StringValue() string
+```
+
+**Returns:** The string value, or empty string if not a StringType.
+
+---
+
+#### IntValue
+
+Returns the int value. Returns 0 if the field is not an IntType.
+
+```go
+func (f Field) IntValue() int
+```
+
+**Returns:** The int value, or 0 if not an IntType.
+
+---
+
+#### Int64Value
+
+Returns the int64 value. Returns 0 if the field is not an Int64Type.
+
+```go
+func (f Field) Int64Value() int64
+```
+
+**Returns:** The int64 value, or 0 if not an Int64Type.
+
+---
+
+#### Float64Value
+
+Returns the float64 value. Returns 0 if the field is not a Float64Type.
+
+```go
+func (f Field) Float64Value() float64
+```
+
+**Returns:** The float64 value, or 0 if not a Float64Type.
+
+---
+
+#### BoolValue
+
+Returns the bool value. Returns false if the field is not a BoolType.
+
+```go
+func (f Field) BoolValue() bool
+```
+
+**Returns:** The bool value, or false if not a BoolType.
+
+---
+
+#### ErrorValue
+
+Returns the error value. Returns nil if the field is not an ErrorType.
+
+```go
+func (f Field) ErrorValue() error
+```
+
+**Returns:** The error value, or nil if not an ErrorType.
+
+---
+
+## FieldType
+
+FieldType represents the type of value stored in a Field. This enables type-specific formatting in formatters.
+
+### Type Definition
+
+```go
+type FieldType int
+```
+
+### Constants
+
+<ParamField path="StringType" type="FieldType" default="0">
+  Represents a string value (iota = 0)
+</ParamField>
+
+<ParamField path="IntType" type="FieldType" default="1">
+  Represents an int value
+</ParamField>
+
+<ParamField path="Int64Type" type="FieldType" default="2">
+  Represents an int64 value
+</ParamField>
+
+<ParamField path="Float64Type" type="FieldType" default="3">
+  Represents a float64 value
+</ParamField>
+
+<ParamField path="BoolType" type="FieldType" default="4">
+  Represents a bool value
+</ParamField>
+
+<ParamField path="ErrorType" type="FieldType" default="5">
+  Represents an error value (formatted specially)
+</ParamField>
+
+<ParamField path="AnyType" type="FieldType" default="6">
+  Represents an arbitrary interface{} value
+</ParamField>
+
+### Usage Example
+
+```go
+import "github.com/drossan/go_logs"
+
+// Create fields with different types
+field := go_logs.String("username", "john")
+
+// Inspect field properties
+key := field.Key()           // "username"
+fieldType := field.Type()    // StringType
+value := field.Value()       // "john"
+strValue := field.StringValue() // "john"
+```

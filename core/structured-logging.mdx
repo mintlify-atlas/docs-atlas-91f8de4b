@@ -1,0 +1,367 @@
+---
+title: "Structured Logging"
+description: "Add typed key-value pairs to your logs for better searchability and analysis"
+---
+
+## Overview
+
+Structured logging allows you to attach **typed key-value pairs** (fields) to log messages instead of concatenating strings. This makes logs:
+
+- **Searchable**: Query by specific fields in log aggregators (ELK, Loki, Datadog)
+- **Machine-readable**: Parse and analyze logs programmatically
+- **Type-safe**: Typed helpers prevent common formatting errors
+- **Zero-allocation**: Fields are simple structs with no heap allocations
+
+## Field Types
+
+go_logs provides typed field constructors for common data types:
+
+<CodeGroup>
+```go String Fields
+go_logs.String("username", "john")
+go_logs.String("host", "db.example.com")
+go_logs.String("status", "success")
+```
+
+```go Numeric Fields
+go_logs.Int("port", 5432)
+go_logs.Int("status_code", 200)
+go_logs.Int64("user_id", 1234567890)
+go_logs.Float64("cpu_percent", 45.7)
+go_logs.Float64("memory_gb", 1.23)
+```
+
+```go Boolean Fields
+go_logs.Bool("debug_mode", true)
+go_logs.Bool("cache_enabled", false)
+go_logs.Bool("is_admin", true)
+```
+
+```go Error Fields
+go_logs.Err(err)  // Key is automatically "error"
+```
+
+```go Any Type
+go_logs.Any("user", User{Name: "John", Age: 30})
+go_logs.Any("config", configStruct)
+```
+</CodeGroup>
+
+## Field Type Definitions
+
+Each field is a simple struct with zero allocations:
+
+```go field.go
+type Field struct {
+    key       string
+    valueType FieldType
+    value     interface{}
+}
+
+type FieldType int
+
+const (
+    StringType  FieldType = iota  // String value
+    IntType                       // int value
+    Int64Type                     // int64 value
+    Float64Type                   // float64 value
+    BoolType                      // bool value
+    ErrorType                     // error value (formatted specially)
+    AnyType                       // arbitrary interface{} value
+)
+```
+
+## Basic Usage
+
+### Simple Fields
+
+```go
+import "github.com/drossan/go_logs"
+
+logger, _ := go_logs.New()
+
+logger.Info("User logged in",
+    go_logs.String("username", "john"),
+    go_logs.String("ip", "192.168.1.1"),
+    go_logs.Int("session_duration_sec", 3600),
+)
+```
+
+<Tabs>
+  <Tab title="Text Output">
+    ```
+    [2026/03/03 10:30:00] INFO User logged in username=john ip=192.168.1.1 session_duration_sec=3600
+    ```
+  </Tab>
+  <Tab title="JSON Output">
+    ```json
+    {"timestamp":"2026-03-03T10:30:00Z","level":"INFO","message":"User logged in","fields":{"username":"john","ip":"192.168.1.1","session_duration_sec":3600}}
+    ```
+  </Tab>
+</Tabs>
+
+### Error Fields
+
+The `Err()` helper automatically sets the key to `"error"`:
+
+```go
+if err := db.Connect(); err != nil {
+    logger.Error("Database connection failed",
+        go_logs.Err(err),
+        go_logs.String("host", "localhost"),
+        go_logs.Int("port", 5432),
+    )
+}
+```
+
+**Output (Text)**:
+```
+[2026/03/03 10:30:00] ERROR Database connection failed error=connection refused host=localhost port=5432
+```
+
+### Multiple Fields
+
+```go
+logger.Info("Request processed",
+    go_logs.String("method", "GET"),
+    go_logs.String("path", "/api/users"),
+    go_logs.Int("status_code", 200),
+    go_logs.Int("response_time_ms", 45),
+    go_logs.Int64("user_id", 1234567890),
+    go_logs.Bool("cached", true),
+)
+```
+
+## Field Methods
+
+Fields expose accessor methods for formatters and hooks:
+
+```go
+field := go_logs.String("username", "john")
+
+field.Key()         // "username"
+field.Type()        // StringType
+field.Value()       // "john" (as interface{})
+field.StringValue() // "john" (as string, or "" if wrong type)
+```
+
+All type-specific accessors:
+
+```go
+field.StringValue()  // string value or ""
+field.IntValue()     // int value or 0
+field.Int64Value()   // int64 value or 0
+field.Float64Value() // float64 value or 0.0
+field.BoolValue()    // bool value or false
+field.ErrorValue()   // error value or nil
+```
+
+## Real-World Examples
+
+### HTTP Request Logging
+
+```go
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+    start := time.Now()
+    
+    logger.Info("Request received",
+        go_logs.String("method", r.Method),
+        go_logs.String("path", r.URL.Path),
+        go_logs.String("remote_addr", r.RemoteAddr),
+        go_logs.String("user_agent", r.UserAgent()),
+    )
+    
+    // Process request...
+    
+    duration := time.Since(start)
+    logger.Info("Request completed",
+        go_logs.String("method", r.Method),
+        go_logs.String("path", r.URL.Path),
+        go_logs.Int("status", 200),
+        go_logs.Float64("duration_ms", float64(duration.Milliseconds())),
+    )
+}
+```
+
+### Database Operation Logging
+
+```go
+func fetchUser(id int64) (*User, error) {
+    logger.Debug("Fetching user from database",
+        go_logs.Int64("user_id", id),
+        go_logs.String("table", "users"),
+    )
+    
+    user, err := db.QueryUser(id)
+    if err != nil {
+        logger.Error("Failed to fetch user",
+            go_logs.Err(err),
+            go_logs.Int64("user_id", id),
+        )
+        return nil, err
+    }
+    
+    logger.Debug("User fetched successfully",
+        go_logs.Int64("user_id", id),
+        go_logs.String("username", user.Username),
+        go_logs.Bool("is_active", user.IsActive),
+    )
+    
+    return user, nil
+}
+```
+
+### System Metrics Logging
+
+```go
+func logSystemMetrics() {
+    var m runtime.MemStats
+    runtime.ReadMemStats(&m)
+    
+    logger.Info("System metrics",
+        go_logs.Float64("memory_mb", float64(m.Alloc)/1024/1024),
+        go_logs.Int("goroutines", runtime.NumGoroutine()),
+        go_logs.Int64("total_alloc_mb", int64(m.TotalAlloc/1024/1024)),
+        go_logs.Int("num_gc", int(m.NumGC)),
+    )
+}
+```
+
+## Field Formatting
+
+### Text Formatter
+
+The TextFormatter formats fields as `key=value` pairs:
+
+- **Strings with spaces** are quoted: `message="hello world"`
+- **Strings without spaces** are unquoted: `status=success`
+- **Errors** use `.Error()` method: `error=connection refused`
+- **Other types** use `fmt.Sprintf("%v")`: `count=42 rate=3.14`
+
+```go text_formatter.go
+switch field.Type() {
+case StringType:
+    val := fmt.Sprintf("%v", field.Value())
+    if strings.Contains(val, " ") {
+        parts = append(parts, fmt.Sprintf(`%s="%s"`, field.Key(), val))
+    } else {
+        parts = append(parts, fmt.Sprintf("%s=%s", field.Key(), val))
+    }
+case ErrorType:
+    if err, ok := field.Value().(error); ok && err != nil {
+        parts = append(parts, fmt.Sprintf("%s=%s", field.Key(), err.Error()))
+    }
+default:
+    parts = append(parts, fmt.Sprintf("%s=%v", field.Key(), field.Value()))
+}
+```
+
+### JSON Formatter
+
+The JSONFormatter includes fields as a nested object:
+
+```json
+{
+  "timestamp": "2026-03-03T10:30:00Z",
+  "level": "INFO",
+  "message": "User logged in",
+  "fields": {
+    "username": "john",
+    "ip": "192.168.1.1",
+    "session_duration_sec": 3600
+  }
+}
+```
+
+Errors are automatically converted to strings:
+
+```go json_formatter.go
+if field.Type() == ErrorType {
+    if err, ok := field.Value().(error); ok && err != nil {
+        jsonEntry.Fields[field.Key()] = err.Error()
+    } else {
+        jsonEntry.Fields[field.Key()] = nil
+    }
+}
+```
+
+## Performance
+
+Fields are designed for **zero-allocation** creation:
+
+- **Field creation**: 0.34 ns/op, 0 allocs/op
+- Simple struct construction with no heap allocations
+- Type information stored in enum for fast switches
+
+```go
+// Benchmark results
+BenchmarkFieldCreation-8   1000000000   0.34 ns/op   0 B/op   0 allocs/op
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use consistent field names">
+    Standardize field names across your application for easier searching:
+    
+    ```go
+    // Good: Consistent naming
+    logger.Info("Request", go_logs.Int64("user_id", 123))
+    logger.Info("Update", go_logs.Int64("user_id", 456))
+    
+    // Bad: Inconsistent naming
+    logger.Info("Request", go_logs.Int64("user_id", 123))
+    logger.Info("Update", go_logs.Int64("uid", 456))  // Different key!
+    ```
+  </Accordion>
+
+  <Accordion title="Use typed helpers instead of Any()">
+    Prefer typed helpers for better performance and type safety:
+    
+    ```go
+    // Good: Typed helper
+    logger.Info("User", go_logs.Int64("user_id", 123))
+    
+    // Acceptable but less efficient:
+    logger.Info("User", go_logs.Any("user_id", 123))
+    ```
+  </Accordion>
+
+  <Accordion title="Don't log sensitive data">
+    Avoid logging passwords, tokens, credit cards, etc.:
+    
+    ```go
+    // Bad: Logging sensitive data
+    logger.Info("Login", go_logs.String("password", password))
+    
+    // Good: Omit sensitive data
+    logger.Info("Login", go_logs.String("username", username))
+    
+    // Or use redaction (see Redactor docs)
+    logger := go_logs.New(go_logs.WithCommonRedaction())
+    ```
+  </Accordion>
+
+  <Accordion title="Keep messages human-readable">
+    The message should be readable without fields:
+    
+    ```go
+    // Good: Clear message + structured fields
+    logger.Info("User logged in", go_logs.String("username", "john"))
+    
+    // Bad: Message depends on fields
+    logger.Info("", go_logs.String("event", "login"), go_logs.String("username", "john"))
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Child Loggers" icon="sitemap" href="/core/child-loggers">
+    Learn how to create child loggers with inherited fields
+  </Card>
+  <Card title="Context Propagation" icon="share-nodes" href="/core/context-propagation">
+    Automatically include trace_id and span_id from context
+  </Card>
+</CardGroup>

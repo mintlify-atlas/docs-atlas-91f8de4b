@@ -1,0 +1,424 @@
+---
+title: 'Web Server with Request Logging'
+description: 'Complete HTTP server example with structured request/response logging'
+icon: 'server'
+---
+
+## HTTP Server with Middleware
+
+Complete example of an HTTP server with request logging middleware:
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "net/http"
+    "time"
+    
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Create production logger with JSON output
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithRotatingFile("/var/log/api.log", 100, 5),
+    )
+    defer logger.Sync()
+    
+    // Create server with logging middleware
+    mux := http.NewServeMux()
+    
+    // Register handlers
+    mux.HandleFunc("/api/users", handleUsers)
+    mux.HandleFunc("/api/health", handleHealth)
+    
+    // Wrap with logging middleware
+    handler := loggingMiddleware(logger)(mux)
+    
+    logger.Info("Starting HTTP server",
+        go_logs.Int("port", 8080),
+        go_logs.String("environment", "production"),
+    )
+    
+    http.ListenAndServe(":8080", handler)
+}
+
+// loggingMiddleware logs all HTTP requests with timing
+func loggingMiddleware(logger go_logs.Logger) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            start := time.Now()
+            
+            // Create request-scoped logger with trace ID
+            traceID := generateTraceID()
+            ctx := go_logs.WithTraceID(r.Context(), traceID)
+            
+            reqLogger := logger.With(
+                go_logs.String("trace_id", traceID),
+                go_logs.String("method", r.Method),
+                go_logs.String("path", r.URL.Path),
+                go_logs.String("remote_addr", r.RemoteAddr),
+            )
+            
+            // Log request start
+            reqLogger.Info("Request started")
+            
+            // Wrap response writer to capture status code
+            wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+            
+            // Add logger to context
+            ctx = context.WithValue(ctx, loggerKey, reqLogger)
+            
+            // Process request
+            next.ServeHTTP(wrapped, r.WithContext(ctx))
+            
+            // Log request completion
+            duration := time.Since(start)
+            reqLogger.Info("Request completed",
+                go_logs.Int("status_code", wrapped.statusCode),
+                go_logs.Float64("duration_ms", float64(duration.Milliseconds())),
+            )
+        })
+    }
+}
+
+// responseWriter wraps http.ResponseWriter to capture status code
+type responseWriter struct {
+    http.ResponseWriter
+    statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+    rw.statusCode = code
+    rw.ResponseWriter.WriteHeader(code)
+}
+
+type contextKey string
+
+const loggerKey contextKey = "logger"
+
+// getLogger extracts logger from context
+func getLogger(ctx context.Context) go_logs.Logger {
+    if logger, ok := ctx.Value(loggerKey).(go_logs.Logger); ok {
+        return logger
+    }
+    // Fallback to default logger
+    logger, _ := go_logs.New()
+    return logger
+}
+
+func generateTraceID() string {
+    return fmt.Sprintf("trace-%d", time.Now().UnixNano())
+}
+```
+
+## Handler Functions with Structured Logging
+
+```go
+func handleUsers(w http.ResponseWriter, r *http.Request) {
+    logger := getLogger(r.Context())
+    
+    // Log business logic events
+    logger.Info("Fetching users from database")
+    
+    // Simulate database query
+    users, err := fetchUsers()
+    if err != nil {
+        logger.Error("Failed to fetch users",
+            go_logs.Err(err),
+        )
+        http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+        return
+    }
+    
+    logger.Info("Users fetched successfully",
+        go_logs.Int("count", len(users)),
+    )
+    
+    w.Header().Set("Content-Type", "application/json")
+    w.Write([]byte(`{"users":[]}`))
+}
+
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+    logger := getLogger(r.Context())
+    
+    logger.Debug("Health check requested")
+    
+    w.Header().Set("Content-Type", "application/json")
+    w.Write([]byte(`{"status":"healthy"}`))
+}
+
+func fetchUsers() ([]string, error) {
+    // Simulated database query
+    return []string{"user1", "user2"}, nil
+}
+```
+
+## Dynamic Log Level Control
+
+Add HTTP endpoints to change log level at runtime:
+
+```go
+package main
+
+import (
+    "net/http"
+    
+    "github.com/drossan/go_logs"
+    httplogs "github.com/drossan/go_logs/http"
+)
+
+func main() {
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    )
+    defer logger.Sync()
+    
+    // Create HTTP mux
+    mux := http.NewServeMux()
+    
+    // Application routes
+    mux.HandleFunc("/api/users", handleUsers)
+    
+    // Debug endpoints for log control
+    debugHandler := httplogs.NewDynamicLevelHandler(logger, httplogs.Config{
+        Endpoint:   "/debug/level",
+        AuthToken:  "secret-token",  // Require authentication
+        RateLimit:  10,               // 10 requests per second
+        AllowedIPs: []string{"10.0.0.0/8", "192.168.1.0/24"},
+    })
+    
+    mux.Handle("/debug/level", debugHandler)
+    mux.Handle("/debug/level/metrics", debugHandler)
+    
+    logger.Info("Server started",
+        go_logs.Int("port", 8080),
+    )
+    
+    http.ListenAndServe(":8080", mux)
+}
+```
+
+**Usage:**
+
+```bash
+# Get current log level
+curl -H "Authorization: Bearer secret-token" http://localhost:8080/debug/level
+# {"level":"INFO","timestamp":"2026-03-03T10:30:00Z"}
+
+# Change to debug level
+curl -X PUT -H "Authorization: Bearer secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"level":"debug"}' \
+  http://localhost:8080/debug/level
+# {"level":"DEBUG","timestamp":"2026-03-03T10:30:05Z"}
+
+# Get logging metrics
+curl -H "Authorization: Bearer secret-token" http://localhost:8080/debug/level/metrics
+# {"total":1234,"by_level":{"INFO":1000,"ERROR":234},"dropped":0}
+```
+
+## Async Logging for High Throughput
+
+Use async logging for high-traffic APIs:
+
+```go
+package main
+
+import (
+    "net/http"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/async"
+)
+
+func main() {
+    // Create synchronous logger
+    syncLogger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithRotatingFile("/var/log/api.log", 100, 5),
+    )
+    
+    // Wrap with async logger (buffer size 10000)
+    logger := async.Wrap(syncLogger, 10000)
+    defer logger.Sync()  // Flush on shutdown
+    
+    // Create server
+    mux := http.NewServeMux()
+    mux.HandleFunc("/api/users", handleUsers)
+    
+    // Wrap with logging middleware
+    handler := loggingMiddleware(logger)(mux)
+    
+    logger.Info("Starting high-throughput server",
+        go_logs.Int("port", 8080),
+        go_logs.Int("buffer_size", 10000),
+    )
+    
+    http.ListenAndServe(":8080", handler)
+}
+```
+
+## Request/Response Body Logging
+
+Log request and response bodies for debugging:
+
+```go
+import (
+    "bytes"
+    "io"
+    "net/http"
+)
+
+func bodyLoggingMiddleware(logger go_logs.Logger) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            reqLogger := getLogger(r.Context())
+            
+            // Read and log request body
+            if r.Body != nil {
+                bodyBytes, _ := io.ReadAll(r.Body)
+                r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+                
+                if len(bodyBytes) > 0 {
+                    reqLogger.Debug("Request body",
+                        go_logs.String("body", string(bodyBytes)),
+                    )
+                }
+            }
+            
+            next.ServeHTTP(w, r)
+        })
+    }
+}
+```
+
+## Error Recovery Middleware
+
+Log panics and recover gracefully:
+
+```go
+func recoveryMiddleware(logger go_logs.Logger) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            defer func() {
+                if err := recover(); err != nil {
+                    reqLogger := getLogger(r.Context())
+                    
+                    reqLogger.Error("Panic recovered",
+                        go_logs.Any("panic", err),
+                        go_logs.String("method", r.Method),
+                        go_logs.String("path", r.URL.Path),
+                    )
+                    
+                    http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+                }
+            }()
+            
+            next.ServeHTTP(w, r)
+        })
+    }
+}
+```
+
+## Complete Production Server
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/async"
+    httplogs "github.com/drossan/go_logs/http"
+)
+
+func main() {
+    // Configure production logger
+    syncLogger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithRotatingFile("/var/log/api.log", 100, 5),
+    )
+    
+    logger := async.Wrap(syncLogger, 10000)
+    defer logger.Sync()
+    
+    // Create HTTP server
+    mux := http.NewServeMux()
+    
+    // Application routes
+    mux.HandleFunc("/api/users", handleUsers)
+    mux.HandleFunc("/api/health", handleHealth)
+    
+    // Debug routes
+    debugHandler := httplogs.NewDynamicLevelHandler(logger, httplogs.Config{
+        Endpoint:  "/debug/level",
+        AuthToken: os.Getenv("DEBUG_TOKEN"),
+    })
+    mux.Handle("/debug/level", debugHandler)
+    
+    // Apply middleware
+    handler := recoveryMiddleware(logger)(
+        loggingMiddleware(logger)(mux),
+    )
+    
+    // Create server
+    srv := &http.Server{
+        Addr:         ":8080",
+        Handler:      handler,
+        ReadTimeout:  15 * time.Second,
+        WriteTimeout: 15 * time.Second,
+    }
+    
+    // Start server
+    go func() {
+        logger.Info("Starting HTTP server",
+            go_logs.Int("port", 8080),
+        )
+        if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+            logger.Error("Server error", go_logs.Err(err))
+        }
+    }()
+    
+    // Graceful shutdown
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+    
+    logger.Info("Shutting down server")
+    
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    
+    if err := srv.Shutdown(ctx); err != nil {
+        logger.Error("Server shutdown error", go_logs.Err(err))
+    }
+    
+    logger.Info("Server stopped")
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Microservices Patterns" icon="cubes" href="/examples/microservices">
+    Learn distributed tracing and service mesh logging
+  </Card>
+  <Card title="Production Setup" icon="rocket" href="/examples/production-setup">
+    Complete production configuration guide
+  </Card>
+</CardGroup>

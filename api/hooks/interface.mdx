@@ -1,0 +1,369 @@
+---
+title: 'Hook Interface'
+description: 'Extensible hook system for processing log entries'
+---
+
+## Overview
+
+The `Hook` interface enables extensible processing of log entries. Hooks are called after an entry is formatted but before it's written, allowing you to:
+
+- Send logs to external systems (Slack, email, monitoring)
+- Filter or modify log entries
+- Collect metrics and statistics
+- Trigger alerts based on log content
+
+Hooks run synchronously by default and can be used with any log level filtering.
+
+## Hook Interface
+
+```go
+type Hook interface {
+    Run(entry *Entry) error
+}
+```
+
+Implement this interface to create custom hooks that process log entries.
+
+**Parameters:**
+- `entry` - The log entry to process
+
+**Returns:**
+- `error` - Error if hook processing failed, nil otherwise
+
+## HookFunc Adapter
+
+Adapter type that allows ordinary functions to be used as hooks.
+
+```go
+type HookFunc func(entry *Entry) error
+```
+
+**Example:**
+```go
+hook := go_logs.HookFunc(func(entry *go_logs.Entry) error {
+    fmt.Printf("Hook: %s\n", entry.Message)
+    return nil
+})
+```
+
+**Location:** hook.go:14
+
+## Constructor Functions
+
+### NewFuncHook
+
+Creates a Hook from a function.
+
+```go
+func NewFuncHook(fn func(entry *Entry) error) Hook
+```
+
+**Parameters:**
+- `fn` - A function that processes log entries
+
+**Returns:**
+- `Hook` - A Hook that calls the provided function
+
+**Example:**
+```go
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    // Collect metrics
+    metrics.Inc("logs.total", 1)
+    if entry.Level >= go_logs.ErrorLevel {
+        metrics.Inc("logs.errors", 1)
+    }
+    return nil
+})
+
+logger := go_logs.New(go_logs.WithHooks(hook))
+```
+
+**Location:** hook.go:45
+
+## Usage Examples
+
+### Simple Function Hook
+
+```go
+import "github.com/drossan/go_logs"
+
+// Create a simple hook that prints to stderr
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    if entry.Level >= go_logs.ErrorLevel {
+        fmt.Fprintf(os.Stderr, "ERROR: %s\n", entry.Message)
+    }
+    return nil
+})
+
+logger := go_logs.New(
+    go_logs.WithHooks(hook),
+)
+```
+
+### Metrics Collection Hook
+
+```go
+type MetricsHook struct {
+    counters map[go_logs.Level]int
+    mu       sync.Mutex
+}
+
+func (h *MetricsHook) Run(entry *go_logs.Entry) error {
+    h.mu.Lock()
+    defer h.mu.Unlock()
+    
+    h.counters[entry.Level]++
+    return nil
+}
+
+func (h *MetricsHook) GetCount(level go_logs.Level) int {
+    h.mu.Lock()
+    defer h.mu.Unlock()
+    return h.counters[level]
+}
+
+// Usage
+metricsHook := &MetricsHook{
+    counters: make(map[go_logs.Level]int),
+}
+
+logger := go_logs.New(
+    go_logs.WithHooks(metricsHook),
+)
+```
+
+### Alert Hook
+
+```go
+// Send alerts for critical errors
+alertHook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    if entry.Level >= go_logs.ErrorLevel {
+        return sendAlert(entry.Message, entry.Fields)
+    }
+    return nil
+})
+
+logger := go_logs.New(
+    go_logs.WithHooks(alertHook),
+)
+```
+
+### Level-Filtered Hook
+
+```go
+type LevelFilterHook struct {
+    minLevel go_logs.Level
+    hook     go_logs.Hook
+}
+
+func (h *LevelFilterHook) Run(entry *go_logs.Entry) error {
+    if entry.Level.ShouldLog(h.minLevel) {
+        return h.hook.Run(entry)
+    }
+    return nil
+}
+
+// Usage: Only send errors and fatals to Slack
+slackHook := hooks.NewSlackHook(notifier, go_logs.InfoLevel)
+filteredHook := &LevelFilterHook{
+    minLevel: go_logs.ErrorLevel,
+    hook:     slackHook,
+}
+
+logger := go_logs.New(
+    go_logs.WithHooks(filteredHook),
+)
+```
+
+### Field Inspection Hook
+
+```go
+// Log entries with specific fields to separate file
+fieldHook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    if entry.HasField("user_id") {
+        userID := entry.GetFieldValue("user_id")
+        return logToUserFile(userID, entry)
+    }
+    return nil
+})
+
+logger := go_logs.New(
+    go_logs.WithHooks(fieldHook),
+)
+```
+
+### Multiple Hooks
+
+```go
+// Combine multiple hooks
+metricsHook := createMetricsHook()
+slackHook := hooks.NewSlackHook(notifier, go_logs.ErrorLevel)
+alertHook := createAlertHook()
+
+logger := go_logs.New(
+    go_logs.WithHooks(metricsHook, slackHook, alertHook),
+)
+
+// Hooks are executed in the order they were added
+```
+
+### Entry Modification Hook
+
+```go
+// Redact sensitive fields
+redactHook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    // Clone entry to avoid modifying original
+    cloned := entry.Clone()
+    
+    // Redact password fields
+    if cloned.HasField("password") {
+        cloned.ReplaceFieldValue("password", "***REDACTED***")
+    }
+    
+    return nil
+})
+
+logger := go_logs.New(
+    go_logs.WithHooks(redactHook),
+)
+```
+
+## Hook Execution
+
+Hooks are executed:
+
+1. **After formatting**: Entry has been converted to bytes
+2. **Before writing**: Output hasn't been written yet
+3. **Synchronously**: Each hook runs in sequence
+4. **With error handling**: Hook errors are logged but don't prevent other hooks
+
+**Execution order:**
+```
+1. Logger creates Entry
+2. Entry passes level filter
+3. Formatter formats Entry
+4. Hooks run in registration order
+5. Output is written
+```
+
+## Entry Methods for Hooks
+
+Hooks have access to the full Entry API:
+
+```go
+type Entry struct {
+    Level      Level
+    Message    string
+    Fields     []Field
+    Timestamp  time.Time
+    Caller     *CallerInfo
+    StackTrace []byte
+}
+
+// Inspection methods
+entry.HasField(key string) bool
+entry.GetField(key string) Field
+entry.GetFieldValue(key string) interface{}
+entry.FieldCount() int
+
+// Modification methods (create new entry)
+entry.Clone() *Entry
+entry.WithFields(fields ...Field) *Entry
+entry.WithLevel(level Level) *Entry
+entry.WithMessage(msg string) *Entry
+```
+
+## Best Practices
+
+<Tip>
+**Keep Hooks Fast**
+
+Hooks run synchronously and block logging. Keep them fast:
+
+```go
+// Good: Quick metrics increment
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    atomic.AddInt64(&errorCount, 1)
+    return nil
+})
+
+// Bad: Slow network call
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    return http.Post("...", ...) // Blocks logging!
+})
+
+// Better: Async processing
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    select {
+    case eventChan <- entry.Clone():
+    default:
+    }
+    return nil
+})
+```
+</Tip>
+
+<Tip>
+**Level Filtering**
+
+Filter by level in your hook to avoid unnecessary processing:
+
+```go
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    // Fast-path: Skip if below threshold
+    if !entry.Level.ShouldLog(go_logs.ErrorLevel) {
+        return nil
+    }
+    
+    // Process only errors and above
+    return sendToMonitoring(entry)
+})
+```
+</Tip>
+
+<Warning>
+**Error Handling**
+
+Hook errors are logged but don't prevent other hooks or writing:
+
+```go
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    if err := sendNotification(entry); err != nil {
+        // Error is logged, but logging continues
+        return fmt.Errorf("failed to send notification: %w", err)
+    }
+    return nil
+})
+```
+</Warning>
+
+<Warning>
+**Thread Safety**
+
+Make sure your hooks are thread-safe if they maintain state:
+
+```go
+type CounterHook struct {
+    count int64 // Use atomic operations
+}
+
+func (h *CounterHook) Run(entry *go_logs.Entry) error {
+    atomic.AddInt64(&h.count, 1) // Thread-safe
+    return nil
+}
+```
+</Warning>
+
+## Built-in Hooks
+
+go_logs provides several built-in hooks:
+
+- [SlackHook](/api/hooks/slack) - Send logs to Slack channels
+
+See [Creating Custom Hooks](/api/hooks/custom) for detailed examples.
+
+## Related
+
+- [SlackHook](/api/hooks/slack) - Built-in Slack integration
+- [Custom Hooks](/api/hooks/custom) - Guide to creating custom hooks
+- [Logger Options](/api/logger#options) - WithHooks option

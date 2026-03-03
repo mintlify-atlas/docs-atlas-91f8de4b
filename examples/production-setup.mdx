@@ -1,0 +1,573 @@
+---
+title: 'Production Setup'
+description: 'Complete guide for deploying go_logs in production environments'
+icon: 'rocket'
+---
+
+## Production Logger Configuration
+
+Complete production-ready logger setup:
+
+```go
+package logging
+
+import (
+    "os"
+    "runtime"
+    "time"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/async"
+    "github.com/drossan/go_logs/otel"
+    "github.com/drossan/go_logs/hooks"
+    "github.com/drossan/go_logs/adapters"
+)
+
+type ProductionConfig struct {
+    ServiceName    string
+    ServiceVersion string
+    Environment    string
+    LogLevel       string
+    OTLPEndpoint   string
+    SlackToken     string
+    SlackChannel   string
+}
+
+func NewProductionLogger(cfg ProductionConfig) (go_logs.Logger, error) {
+    // Parse log level
+    level := parseLogLevel(cfg.LogLevel)
+    
+    // Create base logger with JSON formatter
+    syncLogger, err := go_logs.New(
+        go_logs.WithLevel(level),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+            Filename:     "/var/log/app.log",
+            MaxSizeMB:    100,
+            MaxBackups:   30,
+            RotationType: go_logs.RotateDaily,
+            Compress:     true,
+            MaxAge:       30,
+        }),
+        go_logs.WithCaller(true),
+        go_logs.WithStackTrace(true),
+        go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+        go_logs.WithCommonRedaction(),
+    )
+    if err != nil {
+        return nil, err
+    }
+    
+    // Add hooks
+    var hooks []go_logs.Hook
+    
+    // OpenTelemetry hook
+    if cfg.OTLPEndpoint != "" {
+        otelExporter := otel.NewOTLPExporterWithConfig(otel.OTLPConfig{
+            Endpoint:      cfg.OTLPEndpoint,
+            MaxPending:    1000,
+            FlushInterval: 5 * time.Second,
+            Timeout:       30 * time.Second,
+        })
+        otelHook := otel.NewOTLPHookWithExporter(otelExporter, go_logs.InfoLevel)
+        hooks = append(hooks, otelHook)
+    }
+    
+    // Slack hook for critical errors
+    if cfg.SlackToken != "" && cfg.SlackChannel != "" {
+        slackNotifier, err := adapters.NewSlackNotifierWithChannel(
+            cfg.SlackToken,
+            cfg.SlackChannel,
+        )
+        if err == nil {
+            slackHook := hooks.NewSlackHook(slackNotifier, go_logs.ErrorLevel)
+            hooks = append(hooks, slackHook)
+        }
+    }
+    
+    // Add hooks to logger
+    for _, hook := range hooks {
+        syncLogger = syncLogger.WithHook(hook)
+    }
+    
+    // Wrap with async logger for performance
+    asyncLogger := async.WrapWithConfig(syncLogger, async.Config{
+        BufferSize:      10000,
+        ShutdownTimeout: 30 * time.Second,
+    })
+    
+    // Add service metadata
+    hostname, _ := os.Hostname()
+    
+    productionLogger := asyncLogger.With(
+        go_logs.String("service.name", cfg.ServiceName),
+        go_logs.String("service.version", cfg.ServiceVersion),
+        go_logs.String("service.environment", cfg.Environment),
+        go_logs.String("host.name", hostname),
+        go_logs.String("host.arch", runtime.GOARCH),
+        go_logs.String("host.os", runtime.GOOS),
+    )
+    
+    return productionLogger, nil
+}
+
+func parseLogLevel(level string) go_logs.Level {
+    switch level {
+    case "trace":
+        return go_logs.TraceLevel
+    case "debug":
+        return go_logs.DebugLevel
+    case "info":
+        return go_logs.InfoLevel
+    case "warn":
+        return go_logs.WarnLevel
+    case "error":
+        return go_logs.ErrorLevel
+    default:
+        return go_logs.InfoLevel
+    }
+}
+```
+
+## Environment Variables
+
+Configure via environment variables:
+
+```bash
+# .env.production
+SERVICE_NAME=payment-api
+SERVICE_VERSION=1.2.3
+ENVIRONMENT=production
+
+# Logging
+LOG_LEVEL=info
+LOG_FORMAT=json
+LOG_FILE_PATH=/var/log
+LOG_FILE_NAME=app.log
+LOG_MAX_SIZE=100
+LOG_MAX_BACKUPS=30
+
+# OpenTelemetry
+OTLP_ENDPOINT=http://otel-collector:4318/v1/logs
+
+# Slack
+SLACK_TOKEN=xoxb-your-token
+SLACK_CHANNEL_ID=C123456789
+
+# Application
+PORT=8080
+```
+
+## Kubernetes Deployment
+
+Deploy with Kubernetes:
+
+```yaml
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-api
+  namespace: production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: payment-api
+  template:
+    metadata:
+      labels:
+        app: payment-api
+        version: v1.2.3
+    spec:
+      containers:
+      - name: app
+        image: myregistry/payment-api:1.2.3
+        ports:
+        - containerPort: 8080
+        env:
+        - name: SERVICE_NAME
+          value: "payment-api"
+        - name: SERVICE_VERSION
+          value: "1.2.3"
+        - name: ENVIRONMENT
+          value: "production"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: OTLP_ENDPOINT
+          value: "http://otel-collector:4318/v1/logs"
+        - name: SLACK_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: slack-credentials
+              key: token
+        - name: SLACK_CHANNEL_ID
+          valueFrom:
+            secretKeyRef:
+              name: slack-credentials
+              key: channel_id
+        volumeMounts:
+        - name: logs
+          mountPath: /var/log
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: logs
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-api
+  namespace: production
+spec:
+  selector:
+    app: payment-api
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: LoadBalancer
+```
+
+## Secret Management
+
+```yaml
+# secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: slack-credentials
+  namespace: production
+type: Opaque
+stringData:
+  token: xoxb-your-slack-token
+  channel_id: C123456789
+```
+
+**Apply:**
+```bash
+kubectl apply -f secrets.yaml
+kubectl apply -f deployment.yaml
+```
+
+## Main Application Setup
+
+Production application with all features:
+
+```go
+package main
+
+import (
+    "context"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+    
+    "github.com/drossan/go_logs"
+    httplogs "github.com/drossan/go_logs/http"
+)
+
+func main() {
+    // Load configuration
+    cfg := ProductionConfig{
+        ServiceName:    getEnv("SERVICE_NAME", "app"),
+        ServiceVersion: getEnv("SERVICE_VERSION", "unknown"),
+        Environment:    getEnv("ENVIRONMENT", "production"),
+        LogLevel:       getEnv("LOG_LEVEL", "info"),
+        OTLPEndpoint:   getEnv("OTLP_ENDPOINT", ""),
+        SlackToken:     getEnv("SLACK_TOKEN", ""),
+        SlackChannel:   getEnv("SLACK_CHANNEL_ID", ""),
+    }
+    
+    // Initialize logger
+    logger, err := NewProductionLogger(cfg)
+    if err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+    
+    logger.Info("Service starting",
+        go_logs.String("version", cfg.ServiceVersion),
+        go_logs.String("environment", cfg.Environment),
+    )
+    
+    // Create HTTP server
+    mux := http.NewServeMux()
+    
+    // Application routes
+    mux.HandleFunc("/api/", handleAPI)
+    mux.HandleFunc("/health", handleHealth)
+    mux.HandleFunc("/ready", handleReady)
+    
+    // Debug endpoints (authenticated)
+    debugHandler := httplogs.NewDynamicLevelHandler(logger, httplogs.Config{
+        Endpoint:   "/debug/level",
+        AuthToken:  getEnv("DEBUG_TOKEN", ""),
+        RateLimit:  10,
+        AllowedIPs: []string{"10.0.0.0/8"},
+    })
+    mux.Handle("/debug/level", debugHandler)
+    mux.Handle("/debug/level/metrics", debugHandler)
+    
+    // Apply middleware
+    handler := recoveryMiddleware(logger)(
+        loggingMiddleware(logger)(
+            corsMiddleware(mux),
+        ),
+    )
+    
+    // Create server
+    port := getEnv("PORT", "8080")
+    srv := &http.Server{
+        Addr:         ":" + port,
+        Handler:      handler,
+        ReadTimeout:  15 * time.Second,
+        WriteTimeout: 15 * time.Second,
+        IdleTimeout:  60 * time.Second,
+    }
+    
+    // Start server in goroutine
+    go func() {
+        logger.Info("HTTP server listening",
+            go_logs.String("addr", srv.Addr),
+        )
+        
+        if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+            logger.Error("Server error",
+                go_logs.Err(err),
+            )
+            os.Exit(1)
+        }
+    }()
+    
+    // Graceful shutdown
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    sig := <-quit
+    
+    logger.Info("Shutdown signal received",
+        go_logs.String("signal", sig.String()),
+    )
+    
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    
+    if err := srv.Shutdown(ctx); err != nil {
+        logger.Error("Server shutdown error",
+            go_logs.Err(err),
+        )
+    }
+    
+    logger.Info("Service stopped gracefully")
+}
+
+func getEnv(key, defaultValue string) string {
+    if value := os.Getenv(key); value != "" {
+        return value
+    }
+    return defaultValue
+}
+```
+
+## Monitoring and Observability
+
+### Prometheus Metrics Endpoint
+
+```go
+import (
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+var (
+    logsTotal = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "app_logs_total",
+            Help: "Total number of log messages",
+        },
+        []string{"level", "service"},
+    )
+    
+    logsDropped = prometheus.NewCounter(
+        prometheus.CounterOpts{
+            Name: "app_logs_dropped_total",
+            Help: "Total number of dropped log messages",
+        },
+    )
+)
+
+func init() {
+    prometheus.MustRegister(logsTotal)
+    prometheus.MustRegister(logsDropped)
+}
+
+func setupMetrics(logger go_logs.Logger) {
+    // Periodically export log metrics to Prometheus
+    go func() {
+        ticker := time.NewTicker(10 * time.Second)
+        defer ticker.Stop()
+        
+        for range ticker.C {
+            metrics := logger.GetMetrics()
+            snapshot := metrics.Snapshot()
+            
+            // Update Prometheus metrics
+            for level, count := range snapshot.ByLevel {
+                logsTotal.WithLabelValues(
+                    level.String(),
+                    "payment-api",
+                ).Add(float64(count))
+            }
+            
+            logsDropped.Add(float64(metrics.Dropped()))
+            
+            // Reset go_logs metrics
+            metrics.Reset()
+        }
+    }()
+}
+
+// Add to main()
+func main() {
+    // ...
+    setupMetrics(logger)
+    mux.Handle("/metrics", promhttp.Handler())
+    // ...
+}
+```
+
+## Performance Tuning
+
+### Async Logger Configuration
+
+```go
+// High-throughput setup
+asyncLogger := async.WrapWithConfig(syncLogger, async.Config{
+    BufferSize:      50000,  // Large buffer for high traffic
+    ShutdownTimeout: 30 * time.Second,
+})
+```
+
+### File Rotation Optimization
+
+```go
+go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+    Filename:     "/var/log/app.log",
+    MaxSizeMB:    200,         // Larger files
+    MaxBackups:   7,           // Keep 1 week
+    RotationType: go_logs.RotateDaily,
+    Compress:     true,        // Save disk space
+    MaxAge:       7,           // Auto-delete after 7 days
+})
+```
+
+## Docker Production Image
+
+```dockerfile
+# Dockerfile
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source
+COPY . .
+
+# Build
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o app .
+
+# Production image
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /app
+
+# Copy binary
+COPY --from=builder /build/app .
+
+# Create log directory
+RUN mkdir -p /var/log
+
+# Run as non-root
+RUN addgroup -g 1000 appuser && \
+    adduser -D -u 1000 -G appuser appuser && \
+    chown -R appuser:appuser /app /var/log
+
+USER appuser
+
+EXPOSE 8080
+
+CMD ["./app"]
+```
+
+## Health Checks
+
+```go
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte(`{"status":"healthy"}`))
+}
+
+func handleReady(w http.ResponseWriter, r *http.Request) {
+    // Check dependencies
+    if !checkDatabase() {
+        w.WriteHeader(http.StatusServiceUnavailable)
+        w.Write([]byte(`{"status":"not ready","reason":"database unavailable"}`))
+        return
+    }
+    
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte(`{"status":"ready"}`))
+}
+```
+
+## Best Practices Checklist
+
+<Check>Use JSON formatter in production for structured logging</Check>
+<Check>Enable async logging for high-throughput applications</Check>
+<Check>Configure log rotation with compression and retention</Check>
+<Check>Redact sensitive data (passwords, tokens, API keys)</Check>
+<Check>Include caller info and stack traces for errors</Check>
+<Check>Add service metadata (name, version, environment, hostname)</Check>
+<Check>Export logs to centralized system (OpenTelemetry, ELK)</Check>
+<Check>Send critical errors to Slack or PagerDuty</Check>
+<Check>Implement graceful shutdown with log flushing</Check>
+<Check>Monitor log metrics and set up alerts</Check>
+<Check>Use dynamic log levels for debugging in production</Check>
+<Check>Run as non-root user in containers</Check>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Microservices" icon="cubes" href="/examples/microservices">
+    Distributed tracing patterns
+  </Card>
+  <Card title="OpenTelemetry" icon="chart-network" href="/examples/opentelemetry">
+    Modern observability setup
+  </Card>
+</CardGroup>

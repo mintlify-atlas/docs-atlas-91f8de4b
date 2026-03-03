@@ -1,80 +1,256 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick start
+description: Get started with go_logs in minutes
 ---
 
-## Get started in three steps
+Learn the basics of go_logs with a working example. This guide covers creating a logger, logging with structured fields, and using child loggers.
 
-Get your documentation site running locally and make your first customization.
+## Basic usage
 
-### Step 1: Set up your local environment
+<Steps>
+  <Step title="Import the package">
+    Import go_logs in your Go file:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+    ```go
+    package main
+
+    import (
+        "os"
+        "github.com/drossan/go_logs"
+    )
+    ```
+  </Step>
+
+  <Step title="Create a logger">
+    Create a logger with configuration options:
+
+    ```go
+    func main() {
+        logger, err := go_logs.New(
+            go_logs.WithLevel(go_logs.InfoLevel),
+            go_logs.WithFormatter(go_logs.NewTextFormatter()),
+            go_logs.WithOutput(os.Stdout),
+        )
+        if err != nil {
+            panic(err)
+        }
+        defer logger.Sync()
+    ```
+
+    <Note>
+    Always call `defer logger.Sync()` to flush buffered logs before your application exits.
+    </Note>
+  </Step>
+
+  <Step title="Log with structured fields">
+    Use typed field helpers for structured logging:
+
+    ```go
+        // Log with structured fields
+        logger.Info("connection established",
+            go_logs.String("host", "db.example.com"),
+            go_logs.Int("port", 5432),
+        )
+
+        logger.Error("database query failed",
+            go_logs.Err(err),
+            go_logs.String("query", "SELECT * FROM users"),
+            go_logs.Int("duration_ms", 150),
+        )
+    }
+    ```
+  </Step>
+</Steps>
+
+## Complete example
+
+Here's a complete working example:
+
+<CodeGroup>
+```go main.go
+package main
+
+import (
+    "os"
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Create logger with configuration
+    logger, err := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewTextFormatter()),
+        go_logs.WithOutput(os.Stdout),
+    )
+    if err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+
+    // Log with structured fields
+    logger.Info("connection established",
+        go_logs.String("host", "db.example.com"),
+        go_logs.Int("port", 5432),
+    )
+
+    // Log different levels
+    logger.Debug("processing request", go_logs.String("endpoint", "/api/users"))
+    logger.Warn("high memory usage", go_logs.Float64("usage_percent", 85.5))
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    // Log errors with error field
+    if err := performOperation(); err != nil {
+        logger.Error("operation failed",
+            go_logs.Err(err),
+            go_logs.String("operation", "database_query"),
+        )
+    }
+}
 
-### Step 2: Deploy your changes
+func performOperation() error {
+    // Simulated operation
+    return nil
+}
+```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+```go Output
+[2026/03/03 10:30:00] INFO connection established host=db.example.com port=5432
+[2026/03/03 10:30:00] WARN high memory usage usage_percent=85.5
+```
+</CodeGroup>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+## Available field types
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+go_logs provides typed helpers for common field types:
 
-### Step 3: Go live
+```go
+// String values
+go_logs.String("username", "john")
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+// Integer values
+go_logs.Int("status_code", 200)
+go_logs.Int64("user_id", 123456789)
+
+// Floating point values
+go_logs.Float64("cpu_percent", 45.7)
+
+// Boolean values
+go_logs.Bool("debug_mode", true)
+
+// Error values (key is automatically "error")
+go_logs.Err(err)
+
+// Any type (uses fmt.Sprintf)
+go_logs.Any("metadata", map[string]string{"ip": "192.168.1.1"})
+```
+
+## Child loggers
+
+Create child loggers with pre-populated fields that automatically propagate:
+
+```go
+// Create base logger
+logger, _ := go_logs.New(go_logs.WithLevel(go_logs.InfoLevel))
+
+// Create child logger with request context
+reqLogger := logger.With(
+    go_logs.String("request_id", "abc-123"),
+    go_logs.String("user_id", "user-456"),
+)
+
+// All logs include request_id and user_id
+reqLogger.Info("request started")
+reqLogger.Info("processing data")
+reqLogger.Error("validation failed")
+```
+
+Output:
+```
+[2026/03/03 10:30:00] INFO request started request_id=abc-123 user_id=user-456
+[2026/03/03 10:30:00] INFO processing data request_id=abc-123 user_id=user-456
+[2026/03/03 10:30:00] ERROR validation failed request_id=abc-123 user_id=user-456
+```
+
+## Context propagation
+
+Use `LogCtx` to automatically extract trace information from context:
+
+```go
+import (
+    "context"
+    "github.com/drossan/go_logs"
+)
+
+func handler(ctx context.Context) {
+    // Add trace ID to context
+    ctx = go_logs.WithTraceID(ctx, "trace-789")
+    ctx = go_logs.WithSpanID(ctx, "span-101")
+
+    // Logger extracts trace_id and span_id automatically
+    logger, _ := go_logs.New()
+    logger.LogCtx(ctx, go_logs.InfoLevel, "processing request")
+    // Output includes: trace_id=trace-789 span_id=span-101
+}
+```
+
+## JSON formatter
+
+Switch to JSON format for production log aggregators:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithOutput(os.Stdout),
+)
+
+logger.Info("user action",
+    go_logs.String("action", "login"),
+    go_logs.String("username", "john"),
+)
+```
+
+Output:
+```json
+{"timestamp":"2026-03-03T10:30:00Z","level":"INFO","message":"user action","fields":{"action":"login","username":"john"}}
+```
+
+## Legacy API (v2)
+
+The v2 API is still fully supported for backward compatibility:
+
+```go
+import "github.com/drossan/go_logs"
+
+func main() {
+    go_logs.Init() // Optional, auto-initializes
+    defer go_logs.Close()
+
+    go_logs.InfoLog("Server started")
+    go_logs.ErrorLog("Connection error")
+    go_logs.Infof("Port: %d", 8080)
+}
+```
+
+<Note>
+While the v2 API works, we recommend using the v3 API for new code to take advantage of structured logging and modern features.
+</Note>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Configure loggers with environment variables and options
+  </Card>
+  
+  <Card title="Structured fields" icon="code" href="/structured-fields">
+    Learn about all available field types and usage
+  </Card>
+  
+  <Card title="Formatters" icon="palette" href="/formatters">
+    Explore text and JSON formatters in detail
+  </Card>
+  
+  <Card title="Child loggers" icon="sitemap" href="/child-loggers">
+    Master child loggers and field propagation
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

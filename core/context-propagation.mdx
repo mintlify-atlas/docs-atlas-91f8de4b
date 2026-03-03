@@ -1,0 +1,481 @@
+---
+title: "Context Propagation"
+description: "Automatically include trace_id, span_id, and other context values in logs"
+---
+
+## Overview
+
+Context propagation enables **automatic extraction** of distributed tracing information from `context.Context` and inclusion in log entries. This is essential for:
+
+- Distributed tracing across microservices
+- Request correlation in multi-service architectures
+- User tracking across operations
+- Debugging complex request flows
+
+go_logs provides built-in support for extracting `trace_id`, `span_id`, `request_id`, and `user_id` from context.
+
+## Context Keys
+
+go_logs defines these unexported context keys in `context.go`:
+
+```go context.go
+type contextKey struct {
+    name string
+}
+
+var (
+    traceIDKey   = contextKey{name: "trace_id"}
+    spanIDKey    = contextKey{name: "span_id"}
+    requestIDKey = contextKey{name: "request_id"}
+    userIDKey    = contextKey{name: "user_id"}
+)
+```
+
+<Note>
+  Using an unexported type prevents key collisions with other packages.
+</Note>
+
+## Adding Values to Context
+
+Use the provided helper functions to add values to context:
+
+<CodeGroup>
+```go Trace ID
+import "github.com/drossan/go_logs"
+
+ctx := context.Background()
+ctx = go_logs.WithTraceID(ctx, "abc-123-def-456")
+```
+
+```go Span ID
+ctx := context.Background()
+ctx = go_logs.WithSpanID(ctx, "span-xyz")
+```
+
+```go Request ID
+ctx := context.Background()
+ctx = go_logs.WithRequestID(ctx, "req-789")
+```
+
+```go User ID
+ctx := context.Background()
+ctx = go_logs.WithUserID(ctx, "user-456")
+```
+
+```go Multiple Values
+ctx := context.Background()
+ctx = go_logs.WithTraceID(ctx, "trace-123")
+ctx = go_logs.WithSpanID(ctx, "span-456")
+ctx = go_logs.WithUserID(ctx, "user-789")
+```
+</CodeGroup>
+
+## LogCtx Method
+
+The `LogCtx` method automatically extracts context values and includes them as fields:
+
+```go logger.go
+// LogCtx logs a message with context support.
+//
+// The context is used to extract distributed tracing information (trace_id, span_id, etc.)
+// and automatically include it in the log entry. This is essential for microservices.
+LogCtx(ctx context.Context, level Level, msg string, fields ...Field)
+```
+
+### Basic Usage
+
+```go
+import (
+    "context"
+    "github.com/drossan/go_logs"
+)
+
+logger, _ := go_logs.New()
+
+// Add trace ID to context
+ctx := context.Background()
+ctx = go_logs.WithTraceID(ctx, "abc-123-def-456")
+
+// LogCtx automatically includes trace_id
+logger.LogCtx(ctx, go_logs.InfoLevel, "Request received")
+// Output: ... trace_id=abc-123-def-456
+```
+
+### With Multiple Context Values
+
+```go
+ctx := context.Background()
+ctx = go_logs.WithTraceID(ctx, "trace-123")
+ctx = go_logs.WithSpanID(ctx, "span-456")
+ctx = go_logs.WithRequestID(ctx, "req-789")
+ctx = go_logs.WithUserID(ctx, "user-999")
+
+logger.LogCtx(ctx, go_logs.InfoLevel, "Processing request")
+// Output: ... trace_id=trace-123 span_id=span-456 request_id=req-789 user_id=user-999
+```
+
+## Extracting Values from Context
+
+You can manually extract values using the getter functions:
+
+```go
+traceID := go_logs.GetTraceID(ctx)
+if traceID != "" {
+    // Use trace ID
+}
+
+spanID := go_logs.GetSpanID(ctx)
+requestID := go_logs.GetRequestID(ctx)
+userID := go_logs.GetUserID(ctx)
+```
+
+Each function returns an **empty string** if the value is not set.
+
+## ExtractFieldsFromContext
+
+This function extracts all context values as fields:
+
+```go context.go
+// ExtractFieldsFromContext extracts structured fields from the context.
+//
+// This function automatically extracts trace_id, span_id, request_id, and user_id
+// from the context and returns them as Field structs.
+func ExtractFieldsFromContext(ctx context.Context) []Field {
+    var fields []Field
+
+    if traceID := GetTraceID(ctx); traceID != "" {
+        fields = append(fields, String("trace_id", traceID))
+    }
+
+    if spanID := GetSpanID(ctx); spanID != "" {
+        fields = append(fields, String("span_id", spanID))
+    }
+
+    if requestID := GetRequestID(ctx); requestID != "" {
+        fields = append(fields, String("request_id", requestID))
+    }
+
+    if userID := GetUserID(ctx); userID != "" {
+        fields = append(fields, String("user_id", userID))
+    }
+
+    return fields
+}
+```
+
+You can use this manually if needed:
+
+```go
+ctxFields := go_logs.ExtractFieldsFromContext(ctx)
+logger.Info("Manual extraction", ctxFields...)
+```
+
+## How LogCtx Works
+
+The `LogCtx` implementation extracts context fields and combines them with explicit fields:
+
+```go logger_impl.go
+// LogCtx implements Logger.LogCtx
+func (l *LoggerImpl) LogCtx(ctx context.Context, level Level, msg string, fields ...Field) {
+    // Fast-path filtering
+    if !level.shouldLog(l.getLevel()) {
+        return
+    }
+
+    // Extract fields from context
+    contextFields := l.extractContextFields(ctx)
+
+    // Combine context fields + explicit fields
+    allFields := append(contextFields, fields...)
+
+    // Log with combined fields
+    l.Log(level, msg, allFields...)
+}
+
+// extractContextFields extracts fields from context for logging
+func (l *LoggerImpl) extractContextFields(ctx context.Context) []Field {
+    // Extract trace_id, span_id, request_id, user_id from context
+    return ExtractFieldsFromContext(ctx)
+}
+```
+
+**Order**: Context fields appear **before** explicit fields.
+
+## Real-World Examples
+
+### HTTP Middleware for Trace Propagation
+
+```go
+import (
+    "context"
+    "net/http"
+    "github.com/drossan/go_logs"
+    "github.com/google/uuid"
+)
+
+func TracingMiddleware(logger go_logs.Logger) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            // Get or generate trace ID
+            traceID := r.Header.Get("X-Trace-Id")
+            if traceID == "" {
+                traceID = uuid.New().String()
+            }
+            
+            // Generate span ID for this service
+            spanID := uuid.New().String()
+            
+            // Generate request ID
+            requestID := uuid.New().String()
+            
+            // Add to context
+            ctx := r.Context()
+            ctx = go_logs.WithTraceID(ctx, traceID)
+            ctx = go_logs.WithSpanID(ctx, spanID)
+            ctx = go_logs.WithRequestID(ctx, requestID)
+            
+            // Add trace ID to response for client
+            w.Header().Set("X-Trace-Id", traceID)
+            
+            // Log with context
+            logger.LogCtx(ctx, go_logs.InfoLevel, "Request received",
+                go_logs.String("method", r.Method),
+                go_logs.String("path", r.URL.Path),
+            )
+            
+            // Pass context to next handler
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+}
+```
+
+### Service-to-Service Trace Propagation
+
+```go
+func callDownstreamService(ctx context.Context, logger go_logs.Logger) error {
+    // Extract trace ID from context
+    traceID := go_logs.GetTraceID(ctx)
+    
+    // Create HTTP request to downstream service
+    req, _ := http.NewRequestWithContext(ctx, "GET", "http://downstream/api", nil)
+    
+    // Propagate trace ID via header
+    if traceID != "" {
+        req.Header.Set("X-Trace-Id", traceID)
+    }
+    
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Calling downstream service",
+        go_logs.String("url", req.URL.String()),
+    )
+    
+    resp, err := http.DefaultClient.Do(req)
+    if err != nil {
+        logger.LogCtx(ctx, go_logs.ErrorLevel, "Downstream call failed",
+            go_logs.Err(err),
+        )
+        return err
+    }
+    defer resp.Body.Close()
+    
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Downstream call succeeded",
+        go_logs.Int("status_code", resp.StatusCode),
+    )
+    
+    return nil
+}
+```
+
+### User Context in Business Logic
+
+```go
+func processUserOrder(ctx context.Context, logger go_logs.Logger, orderID string) error {
+    // Extract user ID from JWT or session
+    userID := extractUserIDFromAuth(ctx)
+    
+    // Add to context
+    ctx = go_logs.WithUserID(ctx, userID)
+    
+    // All logs now include user_id
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Processing order",
+        go_logs.String("order_id", orderID),
+    )
+    
+    if err := validateOrder(ctx, logger, orderID); err != nil {
+        return err
+    }
+    
+    if err := chargePayment(ctx, logger, orderID); err != nil {
+        return err
+    }
+    
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Order processed successfully",
+        go_logs.String("order_id", orderID),
+    )
+    
+    return nil
+}
+
+func validateOrder(ctx context.Context, logger go_logs.Logger, orderID string) error {
+    // Automatically includes user_id from context
+    logger.LogCtx(ctx, go_logs.DebugLevel, "Validating order",
+        go_logs.String("order_id", orderID),
+    )
+    // ...
+    return nil
+}
+```
+
+### Database Query Tracing
+
+```go
+type Database struct {
+    logger go_logs.Logger
+    conn   *sql.DB
+}
+
+func (db *Database) QueryUser(ctx context.Context, userID int64) (*User, error) {
+    db.logger.LogCtx(ctx, go_logs.DebugLevel, "Executing database query",
+        go_logs.String("query", "SELECT * FROM users WHERE id = ?"),
+        go_logs.Int64("user_id", userID),
+    )
+    
+    var user User
+    err := db.conn.QueryRowContext(ctx, "SELECT * FROM users WHERE id = ?", userID).Scan(&user)
+    if err != nil {
+        db.logger.LogCtx(ctx, go_logs.ErrorLevel, "Database query failed",
+            go_logs.Err(err),
+            go_logs.Int64("user_id", userID),
+        )
+        return nil, err
+    }
+    
+    db.logger.LogCtx(ctx, go_logs.DebugLevel, "Database query succeeded",
+        go_logs.Int64("user_id", userID),
+    )
+    
+    return &user, nil
+}
+```
+
+## Integration with OpenTelemetry
+
+If you're using OpenTelemetry, you can extract span context:
+
+```go
+import (
+    "go.opentelemetry.io/otel/trace"
+    "github.com/drossan/go_logs"
+)
+
+func logWithOtelContext(ctx context.Context, logger go_logs.Logger) {
+    // Extract OpenTelemetry span
+    span := trace.SpanFromContext(ctx)
+    if span.SpanContext().IsValid() {
+        // Add to go_logs context
+        ctx = go_logs.WithTraceID(ctx, span.SpanContext().TraceID().String())
+        ctx = go_logs.WithSpanID(ctx, span.SpanContext().SpanID().String())
+    }
+    
+    // Log with trace context
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Operation in traced span")
+}
+```
+
+## Output Examples
+
+<Tabs>
+  <Tab title="Text Format">
+    ```
+    [2026/03/03 10:30:00] INFO Request received trace_id=abc-123 span_id=span-456 request_id=req-789 method=GET path=/api/users
+    [2026/03/03 10:30:01] INFO Processing trace_id=abc-123 span_id=span-456 request_id=req-789 user_id=user-999
+    [2026/03/03 10:30:02] INFO Request completed trace_id=abc-123 span_id=span-456 request_id=req-789 status=200
+    ```
+  </Tab>
+  <Tab title="JSON Format">
+    ```json
+    {"timestamp":"2026-03-03T10:30:00Z","level":"INFO","message":"Request received","fields":{"trace_id":"abc-123","span_id":"span-456","request_id":"req-789","method":"GET","path":"/api/users"}}
+    {"timestamp":"2026-03-03T10:30:01Z","level":"INFO","message":"Processing","fields":{"trace_id":"abc-123","span_id":"span-456","request_id":"req-789","user_id":"user-999"}}
+    {"timestamp":"2026-03-03T10:30:02Z","level":"INFO","message":"Request completed","fields":{"trace_id":"abc-123","span_id":"span-456","request_id":"req-789","status":200}}
+    ```
+  </Tab>
+</Tabs>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always use LogCtx when context is available">
+    ```go
+    // Good: Use LogCtx with context
+    func processRequest(ctx context.Context, logger go_logs.Logger) {
+        logger.LogCtx(ctx, go_logs.InfoLevel, "Processing")
+    }
+    
+    // Bad: Use Log when context is available
+    func processRequest(ctx context.Context, logger go_logs.Logger) {
+        logger.Info("Processing")  // Loses trace context
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Propagate context through function calls">
+    ```go
+    // Good: Pass context through call chain
+    func handleRequest(ctx context.Context) {
+        processData(ctx)
+    }
+    
+    func processData(ctx context.Context) {
+        saveToDatabase(ctx)
+    }
+    
+    // Bad: Create new context
+    func processData(ctx context.Context) {
+        saveToDatabase(context.Background())  // Loses trace
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Set trace ID at entry points (HTTP, gRPC, queue consumers)">
+    ```go
+    // HTTP entry point
+    func httpHandler(w http.ResponseWriter, r *http.Request) {
+        ctx := r.Context()
+        ctx = go_logs.WithTraceID(ctx, getOrGenerateTraceID(r))
+        // ...
+    }
+    
+    // gRPC interceptor
+    func grpcInterceptor(ctx context.Context, ...) {
+        ctx = go_logs.WithTraceID(ctx, getTraceIDFromMetadata(ctx))
+        // ...
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Propagate trace ID to downstream services">
+    ```go
+    func callAPI(ctx context.Context) error {
+        req, _ := http.NewRequestWithContext(ctx, "GET", "http://api", nil)
+        
+        // Propagate trace ID via header
+        if traceID := go_logs.GetTraceID(ctx); traceID != "" {
+            req.Header.Set("X-Trace-Id", traceID)
+        }
+        
+        return http.DefaultClient.Do(req)
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Hooks" icon="plug" href="/features/hooks">
+    Extend logging behavior with custom hooks
+  </Card>
+  <Card title="Metrics" icon="chart-line" href="/features/metrics">
+    Track logging statistics and performance
+  </Card>
+</CardGroup>

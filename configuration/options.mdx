@@ -1,0 +1,406 @@
+---
+title: Configuration Options
+description: Configure go_logs using the Option pattern with functional options
+---
+
+## Overview
+
+go_logs uses the **Option pattern** for flexible, type-safe configuration. Options are passed to the `New()` constructor to customize logger behavior.
+
+```go
+logger, err := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithOutput(os.Stdout),
+)
+```
+
+## Core Options
+
+### WithLevel
+
+Sets the minimum log level threshold. Only messages at or above this level will be logged.
+
+```go
+go_logs.WithLevel(level Level) Option
+```
+
+**Parameters:**
+- `level`: One of `TraceLevel`, `DebugLevel`, `InfoLevel`, `WarnLevel`, `ErrorLevel`, `FatalLevel`, or `SilentLevel`
+
+**Example:**
+```go
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel),
+)
+
+// This will be logged (Debug >= Debug)
+logger.Debug("detailed info")
+
+// This will be filtered out (Trace < Debug)
+logger.Trace("very detailed info")
+```
+
+### WithOutput
+
+Sets the output destination for log entries. Accepts any `io.Writer`.
+
+```go
+go_logs.WithOutput(w io.Writer) Option
+```
+
+**Parameters:**
+- `w`: Any writer implementing `io.Writer` (e.g., `os.Stdout`, files, network connections)
+
+**Example:**
+```go
+import "os"
+
+// Write to stdout
+logger, _ := go_logs.New(
+    go_logs.WithOutput(os.Stdout),
+)
+
+// Write to stderr
+logger, _ := go_logs.New(
+    go_logs.WithOutput(os.Stderr),
+)
+
+// Write to custom writer
+var buf bytes.Buffer
+logger, _ := go_logs.New(
+    go_logs.WithOutput(&buf),
+)
+```
+
+### WithFormatter
+
+Sets the formatter for log entries. Choose between text (development) or JSON (production).
+
+```go
+go_logs.WithFormatter(f Formatter) Option
+```
+
+**Parameters:**
+- `f`: A formatter instance (`TextFormatter` or `JSONFormatter`)
+
+**Example:**
+```go
+// Text format with colors (development)
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewTextFormatter()),
+)
+
+// JSON format (production)
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+)
+```
+
+**Output Examples:**
+
+Text format:
+```
+[2026/03/03 15:30:00] INFO connection established host=db.example.com port=5432
+```
+
+JSON format:
+```json
+{"timestamp":"2026-03-03T15:30:00Z","level":"INFO","message":"connection established","fields":{"host":"db.example.com","port":5432}}
+```
+
+## Caller Information
+
+### WithCaller
+
+Enables or disables caller information (file, line, function) in log entries.
+
+```go
+go_logs.WithCaller(enabled bool) Option
+```
+
+**Parameters:**
+- `enabled`: `true` to include caller info, `false` to disable
+
+**Performance Note:** Adds ~100-200ns per log call when enabled.
+
+**Example:**
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+)
+
+logger.Info("connection established")
+// Output: [2026/03/03 15:30:00] INFO main.go:42 connectDB connection established
+```
+
+### WithCallerSkip
+
+Sets the number of stack frames to skip when capturing caller info. Useful when wrapping the logger.
+
+```go
+go_logs.WithCallerSkip(skip int) Option
+```
+
+**Parameters:**
+- `skip`: Number of stack frames to skip (default: 2)
+
+**Example:**
+```go
+// Custom wrapper function
+func MyLog(logger go_logs.Logger, msg string) {
+    logger.Info(msg)
+}
+
+// Skip 1 additional frame to show caller of MyLog, not MyLog itself
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+    go_logs.WithCallerSkip(3), // 2 (default) + 1 (wrapper)
+)
+```
+
+### WithCallerLevel
+
+Sets the minimum level for automatic caller info capture.
+
+```go
+go_logs.WithCallerLevel(level Level) Option
+```
+
+**Parameters:**
+- `level`: Minimum level for caller capture (default: `ErrorLevel`)
+
+**Example:**
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCallerLevel(go_logs.WarnLevel),
+)
+
+// Caller info included (Warn >= Warn)
+logger.Warn("potential issue")
+
+// No caller info (Info < Warn)
+logger.Info("normal operation")
+```
+
+## Stack Traces
+
+### WithStackTrace
+
+Enables or disables stack trace capture in log entries.
+
+```go
+go_logs.WithStackTrace(enabled bool) Option
+```
+
+**Parameters:**
+- `enabled`: `true` to capture stack traces, `false` to disable
+
+**Example:**
+```go
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+)
+
+logger.Error("database connection failed")
+// Output includes full stack trace
+```
+
+### WithStackTraceLevel
+
+Sets the minimum level for automatic stack trace capture.
+
+```go
+go_logs.WithStackTraceLevel(level Level) Option
+```
+
+**Parameters:**
+- `level`: Minimum level for stack traces (default: `ErrorLevel`)
+
+**Common Values:**
+- `WarnLevel`: Capture for Warn, Error, Fatal
+- `ErrorLevel`: Capture for Error, Fatal (default)
+- `FatalLevel`: Capture only for Fatal
+
+**Example:**
+```go
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+)
+```
+
+## Hooks
+
+### WithHooks
+
+Adds hooks to the logger. Hooks are called for every log entry that passes the level filter.
+
+```go
+go_logs.WithHooks(hooks ...Hook) Option
+```
+
+**Parameters:**
+- `hooks`: One or more `Hook` implementations
+
+**Example:**
+```go
+import "github.com/drossan/go_logs/hooks"
+
+// Slack notifications
+slackHook := hooks.NewSlackHook("xoxb-token", "C123456")
+
+// Custom hook
+myHook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    // Send to monitoring system
+    return nil
+})
+
+logger, _ := go_logs.New(
+    go_logs.WithHooks(slackHook, myHook),
+)
+```
+
+## Security
+
+### WithRedactor
+
+Enables redaction of sensitive fields. Specified keys will be masked with `***`.
+
+```go
+go_logs.WithRedactor(keys ...string) Option
+```
+
+**Parameters:**
+- `keys`: Field names to redact (e.g., "password", "token")
+
+**Example:**
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRedactor("password", "api_key", "secret"),
+)
+
+logger.Info("user login",
+    go_logs.String("username", "john"),
+    go_logs.String("password", "secret123"), // Output: password=***
+)
+```
+
+### WithCommonRedaction
+
+Enables redaction of commonly sensitive field names.
+
+```go
+go_logs.WithCommonRedaction() Option
+```
+
+**Redacted Fields:**
+- `password`, `passwd`, `pwd`
+- `token`, `api_key`, `apikey`, `api-key`
+- `secret`, `authorization`, `auth`
+- `cookie`, `session`
+- `credit_card`, `ssn`, `social_security`
+
+**Example:**
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCommonRedaction(),
+)
+
+logger.Info("API request",
+    go_logs.String("endpoint", "/users"),
+    go_logs.String("token", "abc123"), // Output: token=***
+)
+```
+
+## Output Flags
+
+### WithOutputFlags
+
+Configures output formatting flags (for backward compatibility with v2).
+
+```go
+go_logs.WithOutputFlags(flags int) Option
+```
+
+**Parameters:**
+- `flags`: Formatting flags (implementation-specific)
+
+**Example:**
+```go
+logger, _ := go_logs.New(
+    go_logs.WithOutputFlags(0),
+)
+```
+
+## File Output Options
+
+See [Output Destinations](/configuration/output-destinations) for detailed file output configuration including:
+- `WithRotatingFile`: Simple rotating file writer
+- `WithRotatingFileEnhanced`: Advanced rotation with compression
+- `WithMultiOutput`: Multiple output destinations
+
+## Complete Example
+
+```go
+import (
+    "os"
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+)
+
+func main() {
+    // Production configuration
+    logger, err := go_logs.New(
+        // Core settings
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        
+        // File output with rotation
+        go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+        
+        // Caller and stack traces for errors
+        go_logs.WithCaller(true),
+        go_logs.WithCallerLevel(go_logs.ErrorLevel),
+        go_logs.WithStackTrace(true),
+        go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+        
+        // Security
+        go_logs.WithCommonRedaction(),
+        
+        // Hooks
+        go_logs.WithHooks(
+            hooks.NewSlackHook(os.Getenv("SLACK_TOKEN"), os.Getenv("SLACK_CHANNEL")),
+        ),
+    )
+    if err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+    
+    logger.Info("application started",
+        go_logs.String("version", "1.0.0"),
+        go_logs.Int("port", 8080),
+    )
+}
+```
+
+## Dynamic Configuration
+
+Change configuration at runtime:
+
+```go
+// Change log level
+logger.SetLevel(go_logs.DebugLevel)
+
+// Check current level
+if logger.GetLevel() == go_logs.DebugLevel {
+    logger.Debug("debug mode enabled")
+}
+```
+
+## Next Steps
+
+- [Environment Variables](/configuration/environment-variables) - Configure via environment
+- [Output Destinations](/configuration/output-destinations) - File rotation and multiple outputs
+- [Hooks](/extensibility/hooks) - Extend logger functionality

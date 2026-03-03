@@ -1,0 +1,300 @@
+---
+title: 'V2 Formatted Functions'
+description: 'Legacy formatted logging functions with fmt.Sprintf-style formatting'
+icon: 'text'
+---
+
+## Overview
+
+The v2 formatted functions provide `fmt.Sprintf`-style string formatting for logging. These functions internally format the message and then call the corresponding basic logging function.
+
+<Note>
+  The v2 API is **legacy** and maintained for backward compatibility. For new code, consider using the [v3 Logger API](/core/logger) with structured fields instead of string formatting.
+</Note>
+
+## Functions
+
+### Infof
+
+Logs an informational message with formatting.
+
+```go
+func Infof(format string, args ...interface{})
+```
+
+**Parameters:**
+- `format` - The format string (follows `fmt.Sprintf` syntax)
+- `args` - Arguments for the format string
+
+**Behavior:**
+- Formats the message using `fmt.Sprintf(format, args...)`
+- Calls `InfoLog(message)` internally
+- Displays in **yellow** color
+- Saves to file if `SAVE_LOG_FILE=1`
+- Sends to Slack if `NOTIFICATION_INFO_LOG=1`
+
+**Example:**
+
+```go
+go_logs.Infof("Server started on port %d", 8080)
+go_logs.Infof("User %s logged in from %s", username, ipAddress)
+```
+
+**Source Reference:** `api.go:11-32`
+
+---
+
+### Errorf
+
+Logs an error message with formatting.
+
+```go
+func Errorf(format string, args ...interface{})
+```
+
+**Parameters:**
+- `format` - The format string (follows `fmt.Sprintf` syntax)
+- `args` - Arguments for the format string
+
+**Behavior:**
+- Formats the message using `fmt.Sprintf(format, args...)`
+- Calls `ErrorLog(message)` internally
+- Displays in **red** color
+- Saves to file if `SAVE_LOG_FILE=1`
+- Sends to Slack if `NOTIFICATION_ERROR_LOG=1`
+
+**Example:**
+
+```go
+go_logs.Errorf("Failed to connect to %s: %v", host, err)
+go_logs.Errorf("Database query failed: %s", err.Error())
+```
+
+**Source Reference:** `api.go:34-54`
+
+---
+
+### Warningf
+
+Logs a warning message with formatting.
+
+```go
+func Warningf(format string, args ...interface{})
+```
+
+**Parameters:**
+- `format` - The format string (follows `fmt.Sprintf` syntax)
+- `args` - Arguments for the format string
+
+**Behavior:**
+- Formats the message using `fmt.Sprintf(format, args...)`
+- Calls `WarningLog(message)` internally
+- Displays in **yellow** color
+- Saves to file if `SAVE_LOG_FILE=1`
+- Sends to Slack if `NOTIFICATION_WARNING_LOG=1`
+
+**Example:**
+
+```go
+go_logs.Warningf("API version %s is deprecated, use %s", oldVersion, newVersion)
+go_logs.Warningf("Cache hit rate low: %.2f%%", hitRate)
+```
+
+**Source Reference:** `api.go:56-76`
+
+---
+
+### Successf
+
+Logs a success message with formatting.
+
+```go
+func Successf(format string, args ...interface{})
+```
+
+**Parameters:**
+- `format` - The format string (follows `fmt.Sprintf` syntax)
+- `args` - Arguments for the format string
+
+**Behavior:**
+- Formats the message using `fmt.Sprintf(format, args...)`
+- Calls `SuccessLog(message)` internally
+- Displays in **green** color
+- Saves to file if `SAVE_LOG_FILE=1`
+- Sends to Slack if `NOTIFICATION_SUCCESS_LOG=1`
+
+**Example:**
+
+```go
+go_logs.Successf("Processed %d records in %dms", count, duration)
+go_logs.Successf("Backup completed: %s", backupPath)
+```
+
+**Source Reference:** `api.go:78-98`
+
+---
+
+### Fatalf
+
+Logs a fatal message with formatting and terminates the program.
+
+```go
+func Fatalf(format string, args ...interface{})
+```
+
+**Parameters:**
+- `format` - The format string (follows `fmt.Sprintf` syntax)
+- `args` - Arguments for the format string
+
+**Behavior:**
+- Formats the message using `fmt.Sprintf(format, args...)`
+- Calls `FatalLog(message)` internally
+- Displays in **red** color with bomb emoji (💣)
+- Saves to file if `SAVE_LOG_FILE=1`
+- Sends to Slack if `NOTIFICATION_FATAL_LOG=1`
+- **Terminates the program** with `os.Exit(1)`
+
+**Example:**
+
+```go
+go_logs.Fatalf("Critical error: %v", err)
+go_logs.Fatalf("Cannot bind to port %d", port)
+// Program exits here
+```
+
+<Warning>
+  This function terminates the program. Use only for unrecoverable errors.
+</Warning>
+
+**Source Reference:** `api.go:100-121`
+
+---
+
+## Usage Examples
+
+### Dynamic Messages
+
+```go
+func startServer(port int, host string) {
+    go_logs.Infof("Starting server on %s:%d", host, port)
+    
+    if err := listen(port); err != nil {
+        go_logs.Fatalf("Failed to start server: %v", err)
+    }
+    
+    go_logs.Successf("Server listening on %s:%d", host, port)
+}
+```
+
+### Error Reporting
+
+```go
+func processRequest(id string) error {
+    go_logs.Infof("Processing request %s", id)
+    
+    data, err := fetchData(id)
+    if err != nil {
+        go_logs.Errorf("Failed to fetch data for %s: %v", id, err)
+        return err
+    }
+    
+    go_logs.Successf("Request %s processed: %d bytes", id, len(data))
+    return nil
+}
+```
+
+### Statistics Logging
+
+```go
+func reportStats(processed, failed int, duration time.Duration) {
+    total := processed + failed
+    successRate := float64(processed) / float64(total) * 100
+    
+    go_logs.Infof("Processed %d/%d requests (%.1f%%) in %v", 
+        processed, total, successRate, duration)
+    
+    if failed > 0 {
+        go_logs.Warningf("%d requests failed (%.1f%%)", failed, 
+            float64(failed)/float64(total)*100)
+    }
+}
+```
+
+### Configuration Validation
+
+```go
+func validateConfig(cfg *Config) {
+    if cfg.Port < 1 || cfg.Port > 65535 {
+        go_logs.Fatalf("Invalid port number: %d (must be 1-65535)", cfg.Port)
+    }
+    
+    if cfg.MaxConnections < 1 {
+        go_logs.Warningf("Low max connections: %d (recommended: 100+)", 
+            cfg.MaxConnections)
+    }
+    
+    go_logs.Infof("Configuration validated: port=%d, max_conn=%d", 
+        cfg.Port, cfg.MaxConnections)
+}
+```
+
+## Format String Syntax
+
+These functions use Go's standard `fmt.Sprintf` format verbs:
+
+| Verb | Type | Example |
+|------|------|--------|
+| `%s` | String | `"user-%s"` → `"user-john"` |
+| `%d` | Integer | `"port %d"` → `"port 8080"` |
+| `%f` | Float | `"rate %f"` → `"rate 3.14"` |
+| `%.2f` | Float (2 decimals) | `"%.2f%%"` → `"98.50%"` |
+| `%v` | Any value | `"error: %v"` → `"error: EOF"` |
+| `%+v` | Struct with fields | `"%+v"` → `"{Name:John Age:30}"` |
+| `%t` | Boolean | `"enabled=%t"` → `"enabled=true"` |
+| `%x` | Hex | `"0x%x"` → `"0x1a2b"` |
+
+## Performance Considerations
+
+<Warning>
+  String formatting with `fmt.Sprintf` allocates memory for each call. For high-performance logging, use the v3 structured API instead.
+</Warning>
+
+**V2 Formatted (allocates):**
+```go
+go_logs.Infof("User %s logged in", userID)  // String concatenation
+```
+
+**V3 Structured (zero-alloc):**
+```go
+logger.Info("User logged in", go_logs.String("user_id", userID))  // No concatenation
+```
+
+## Migration to V3
+
+**V2 Formatted:**
+```go
+go_logs.Infof("Request processed: id=%s, status=%d, duration=%dms", 
+    id, status, duration)
+```
+
+**V3 Structured (Recommended):**
+```go
+logger.Info("Request processed",
+    go_logs.String("id", id),
+    go_logs.Int("status", status),
+    go_logs.Int64("duration_ms", duration),
+)
+```
+
+Benefits of v3:
+- Zero allocations for fields
+- Better queryability in log aggregators
+- Type safety
+- Automatic JSON formatting
+
+See the [Migration Guide](/advanced/migration) for details.
+
+## Related API
+
+- [V2 Global Functions](/api/v2/functions) - Basic logging without formatting
+- [V2 Context Functions](/api/v2/context) - Context-aware formatted logging

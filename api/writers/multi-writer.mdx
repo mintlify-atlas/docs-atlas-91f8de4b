@@ -1,0 +1,543 @@
+---
+title: 'MultiWriter'
+description: 'Write logs to multiple outputs simultaneously'
+---
+
+## Overview
+
+`MultiWriter` writes to multiple `io.Writer` destinations simultaneously. This enables logging to both file and console at the same time, or any combination of outputs.
+
+The writer continues operation even if individual writers fail, making it resilient to partial failures.
+
+## Type Definition
+
+```go
+type MultiWriter struct {
+    writers      []io.Writer
+    mu           sync.RWMutex
+    errorHandler func(error) // Optional error handler
+}
+```
+
+## Constructor Functions
+
+### NewMultiWriter
+
+Creates a new MultiWriter that writes to all provided writers.
+
+```go
+func NewMultiWriter(writers ...io.Writer) *MultiWriter
+```
+
+**Parameters:**
+- `writers` - Variable number of io.Writer instances
+
+**Returns:**
+- `*MultiWriter` - Configured multi-writer
+
+**Behavior:**
+- If no writers provided, behaves like io.Discard
+- Writes to all writers in sequence
+- Returns success if at least one writer succeeds
+
+**Example:**
+```go
+import (
+    "github.com/drossan/go_logs"
+    "os"
+)
+
+// Log to both file and console
+file, _ := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+multi := go_logs.NewMultiWriter(file, os.Stdout)
+
+logger := go_logs.New(
+    go_logs.WithOutput(multi),
+)
+
+// Logs appear in both file and console
+logger.Info("Server started")
+```
+
+**Location:** multiwriter.go:26
+
+### NewWriterWithErrorHandler
+
+Creates a MultiWriter with custom error handling.
+
+```go
+func NewWriterWithErrorHandler(errorHandler func(error), writers ...io.Writer) *MultiWriter
+```
+
+**Parameters:**
+- `errorHandler` - Function called when a writer fails
+- `writers` - Variable number of io.Writer instances
+
+**Returns:**
+- `*MultiWriter` - Configured multi-writer with error handler
+
+**Example:**
+```go
+multi := go_logs.NewWriterWithErrorHandler(
+    func(err error) {
+        fmt.Fprintf(os.Stderr, "Writer error: %v\n", err)
+    },
+    file1, file2, os.Stdout,
+)
+
+logger := go_logs.New(go_logs.WithOutput(multi))
+```
+
+**Location:** multiwriter.go:34
+
+## Methods
+
+### Write
+
+Writes data to all writers.
+
+```go
+func (mw *MultiWriter) Write(p []byte) (n int, err error)
+```
+
+**Parameters:**
+- `p` - Byte slice to write
+
+**Returns:**
+- `n` - Number of bytes written (maximum across successful writers)
+- `err` - Error only if all writers failed, nil if at least one succeeded
+
+**Behavior:**
+- Writes to all writers in sequence
+- Collects errors from individual writers
+- Calls error handler for each error (if configured)
+- Returns success if at least one writer succeeds
+- Thread-safe (uses read lock)
+
+**Location:** multiwriter.go:44
+
+### AddWriter
+
+Adds a new writer dynamically.
+
+```go
+func (mw *MultiWriter) AddWriter(w io.Writer)
+```
+
+**Parameters:**
+- `w` - Writer to add
+
+**Thread-safe:** Can be called while logging is active.
+
+**Example:**
+```go
+multi := go_logs.NewMultiWriter(os.Stdout)
+
+// Later: add file logging
+file, _ := os.OpenFile("app.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+multi.AddWriter(file)
+```
+
+**Location:** multiwriter.go:83
+
+### RemoveWriter
+
+Removes a writer from the multi-writer.
+
+```go
+func (mw *MultiWriter) RemoveWriter(w io.Writer)
+```
+
+**Parameters:**
+- `w` - Writer to remove (compared by pointer equality)
+
+**Thread-safe:** Can be called while logging is active.
+
+**Example:**
+```go
+file, _ := os.OpenFile("temp.log", os.O_CREATE|os.O_WRONLY, 0644)
+multi.AddWriter(file)
+
+// Later: stop logging to file
+multi.RemoveWriter(file)
+file.Close()
+```
+
+**Location:** multiwriter.go:91
+
+### SetErrorHandler
+
+Sets or updates the error handler.
+
+```go
+func (mw *MultiWriter) SetErrorHandler(handler func(error))
+```
+
+**Parameters:**
+- `handler` - Function to call when a writer fails
+
+**Example:**
+```go
+multi.SetErrorHandler(func(err error) {
+    metrics.Inc("log.write.errors", 1)
+    log.Printf("Log write error: %v", err)
+})
+```
+
+**Location:** multiwriter.go:104
+
+### Writers
+
+Returns a copy of the current writers slice.
+
+```go
+func (mw *MultiWriter) Writers() []io.Writer
+```
+
+**Returns:**
+- `[]io.Writer` - Copy of writers (safe to modify)
+
+**Thread-safe:** Returns a copy, not the internal slice.
+
+**Example:**
+```go
+writers := multi.Writers()
+fmt.Printf("Logging to %d destinations\n", len(writers))
+```
+
+**Location:** multiwriter.go:111
+
+### Close
+
+Closes all writers that implement io.Closer.
+
+```go
+func (mw *MultiWriter) Close() error
+```
+
+**Returns:**
+- `error` - Last error encountered, or nil
+
+**Behavior:**
+- Calls Close on writers that implement io.Closer
+- Continues closing all writers even if some fail
+- Returns last error encountered
+
+**Example:**
+```go
+multi := go_logs.NewMultiWriter(file1, file2, os.Stdout)
+defer multi.Close() // Closes file1 and file2, skips os.Stdout
+```
+
+**Location:** multiwriter.go:122
+
+### Sync
+
+Syncs all writers that implement the Syncer interface.
+
+```go
+func (mw *MultiWriter) Sync() error
+```
+
+**Returns:**
+- `error` - Last error encountered, or nil
+
+**Syncer interface:**
+```go
+type Syncer interface {
+    Sync() error
+}
+```
+
+**Behavior:**
+- Calls Sync on writers that implement Syncer
+- Continues syncing all writers even if some fail
+- Returns last error encountered
+
+**Example:**
+```go
+logger.Error("Critical error")
+multi.Sync() // Flush all buffers to disk
+```
+
+**Location:** multiwriter.go:144
+
+## Usage Examples
+
+### File + Console Logging
+
+```go
+import (
+    "github.com/drossan/go_logs"
+    "os"
+)
+
+// Log to both file and console
+fileWriter, _ := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+defer fileWriter.Close()
+
+multiWriter := go_logs.NewMultiWriter(fileWriter, os.Stdout)
+
+logger := go_logs.New(
+    go_logs.WithOutput(multiWriter),
+    go_logs.WithFormatter(go_logs.NewTextFormatter()),
+)
+
+// Appears in both file and console
+logger.Info("Server started",
+    go_logs.Int("port", 8080),
+)
+```
+
+### Different Formats for Different Outputs
+
+```go
+import "io"
+
+// JSON to file, text to console
+fileWriter, _ := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+jsonFormatter := go_logs.NewJSONFormatter()
+
+textConsole := os.Stdout
+textFormatter := go_logs.NewTextFormatter()
+
+// Create loggers with different formatters
+fileLogger := go_logs.New(
+    go_logs.WithOutput(fileWriter),
+    go_logs.WithFormatter(jsonFormatter),
+)
+
+consoleLogger := go_logs.New(
+    go_logs.WithOutput(textConsole),
+    go_logs.WithFormatter(textFormatter),
+)
+
+// Use child loggers or call both
+fileLogger.Info("JSON to file")
+consoleLogger.Info("Text to console")
+```
+
+### Error Handling
+
+```go
+import "sync/atomic"
+
+var writeErrors int64
+
+multi := go_logs.NewWriterWithErrorHandler(
+    func(err error) {
+        atomic.AddInt64(&writeErrors, 1)
+        fmt.Fprintf(os.Stderr, "Write failed: %v\n", err)
+    },
+    file1, file2, os.Stdout,
+)
+
+logger := go_logs.New(go_logs.WithOutput(multi))
+
+// Later: check error count
+errors := atomic.LoadInt64(&writeErrors)
+if errors > 0 {
+    fmt.Printf("Total write errors: %d\n", errors)
+}
+```
+
+### Dynamic Writer Management
+
+```go
+multi := go_logs.NewMultiWriter(os.Stdout)
+logger := go_logs.New(go_logs.WithOutput(multi))
+
+// Start logging to console only
+logger.Info("Starting up")
+
+// Add file logging dynamically
+if shouldLogToFile {
+    file, _ := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+    multi.AddWriter(file)
+    logger.Info("Now logging to file too")
+}
+
+// Remove console logging in production
+if isProduction {
+    multi.RemoveWriter(os.Stdout)
+    logger.Info("File only now")
+}
+```
+
+### Separate Error and Info Logs
+
+```go
+import "io"
+
+// Create separate files for errors and all logs
+allLogs, _ := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+errorLogs, _ := go_logs.NewRotatingFileWriter("errors.log", 50, 5)
+
+// All logs go to app.log and console
+mainWriter := go_logs.NewMultiWriter(allLogs, os.Stdout)
+
+logger := go_logs.New(
+    go_logs.WithOutput(mainWriter),
+)
+
+// Error hook writes to errors.log
+errorHook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    if entry.Level >= go_logs.ErrorLevel {
+        formatter := go_logs.NewJSONFormatter()
+        data, _ := formatter.Format(entry)
+        errorLogs.Write(data)
+    }
+    return nil
+})
+
+logger = go_logs.New(
+    go_logs.WithOutput(mainWriter),
+    go_logs.WithHooks(errorHook),
+)
+```
+
+### Testing with Buffer
+
+```go
+import "bytes"
+
+func TestLogging(t *testing.T) {
+    var buf bytes.Buffer
+    
+    multi := go_logs.NewMultiWriter(&buf, os.Stdout)
+    logger := go_logs.New(go_logs.WithOutput(multi))
+    
+    logger.Info("test message")
+    
+    // Check buffer content
+    if !bytes.Contains(buf.Bytes(), []byte("test message")) {
+        t.Error("Message not logged")
+    }
+}
+```
+
+### Resilient Multi-Writer
+
+```go
+// Continue logging even if one writer fails
+file1, _ := os.OpenFile("app.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+file2, _ := os.OpenFile("/readonly/fail.log", os.O_CREATE|os.O_WRONLY, 0644) // Will fail
+
+multi := go_logs.NewWriterWithErrorHandler(
+    func(err error) {
+        // Log error but continue
+        fmt.Fprintf(os.Stderr, "Writer error (continuing): %v\n", err)
+    },
+    file1, file2, os.Stdout,
+)
+
+logger := go_logs.New(go_logs.WithOutput(multi))
+
+// Logs to file1 and os.Stdout even though file2 fails
+logger.Info("Resilient logging")
+```
+
+## Best Practices
+
+<Tip>
+**Order Matters**
+
+Writers are called in the order they were added:
+
+```go
+// File first (for durability), then console
+multi := go_logs.NewMultiWriter(fileWriter, os.Stdout)
+```
+</Tip>
+
+<Tip>
+**Error Handling**
+
+Use error handlers to track failures:
+
+```go
+multi := go_logs.NewWriterWithErrorHandler(
+    func(err error) {
+        metrics.Inc("log.errors", 1)
+    },
+    file, console,
+)
+```
+</Tip>
+
+<Tip>
+**Partial Failure**
+
+MultiWriter succeeds if at least one writer succeeds:
+
+```go
+// If file fails but console succeeds, Write returns nil error
+multi := go_logs.NewMultiWriter(brokenFile, os.Stdout)
+```
+</Tip>
+
+<Warning>
+**Performance Impact**
+
+Each write goes to all writers. Slow writers block the entire write:
+
+```go
+// Slow network writer blocks all logging
+multi := go_logs.NewMultiWriter(file, slowNetworkWriter)
+
+// Better: Use async processing for slow writers
+asyncWriter := wrapAsync(slowNetworkWriter)
+multi := go_logs.NewMultiWriter(file, asyncWriter)
+```
+</Warning>
+
+<Warning>
+**Close All Writers**
+
+MultiWriter.Close only closes writers that implement io.Closer:
+
+```go
+multi := go_logs.NewMultiWriter(file, os.Stdout)
+multi.Close() // Closes file, but os.Stdout remains open (as expected)
+```
+</Warning>
+
+## Thread Safety
+
+All methods are thread-safe:
+
+```go
+multi := go_logs.NewMultiWriter(file, os.Stdout)
+
+// Safe from multiple goroutines
+go logger1.Info("Goroutine 1")
+go logger2.Info("Goroutine 2")
+
+// Safe dynamic modification
+go multi.AddWriter(newWriter)
+go multi.RemoveWriter(oldWriter)
+```
+
+Uses `sync.RWMutex`:
+- Write operations use read lock (multiple concurrent writes)
+- Add/Remove operations use write lock (exclusive access)
+
+## Performance
+
+MultiWriter overhead is minimal:
+
+- Each write iterates through writers sequentially
+- No allocations for the iteration
+- Lock contention only during Add/Remove
+
+**Benchmark results:**
+```
+BenchmarkMultiWriter_2Writers-8    5000000   245 ns/op   0 B/op   0 allocs/op
+BenchmarkMultiWriter_4Writers-8    3000000   456 ns/op   0 B/op   0 allocs/op
+```
+
+## Related
+
+- [RotatingFileWriter](/api/writers/rotating-file) - File rotation writer
+- [SamplingWriter](/api/writers/sampling) - Rate-limited writer
+- [Logger Options](/api/logger#options) - WithOutput option

@@ -1,0 +1,126 @@
+---
+title: Installation
+description: Install go_logs in your Go project
+---
+
+Install go_logs using Go modules with the `go get` command.
+
+## Install the package
+
+Run the following command in your project directory:
+
+```bash
+go get github.com/drossan/go_logs@v3
+```
+
+This installs the latest v3 version of go_logs with all modern features.
+
+## Verify installation
+
+Verify the installation by checking your `go.mod` file:
+
+```go go.mod
+module your-project
+
+go 1.21
+
+require (
+    github.com/drossan/go_logs v3.5.0
+)
+```
+
+## Dependencies
+
+go_logs has minimal dependencies:
+
+- `github.com/fatih/color` - ANSI color support for terminal output
+- `github.com/slack-go/slack` - Slack notifications (optional)
+
+These are automatically installed when you run `go get`.
+
+## Go version
+
+go_logs requires Go 1.21 or later.
+
+Check your Go version:
+
+```bash
+go version
+```
+
+If you need to upgrade Go, visit [https://go.dev/dl/](https://go.dev/dl/).
+
+## Update to latest version
+
+Update to the latest version of go_logs:
+
+```bash
+go get -u github.com/drossan/go_logs
+```
+
+Or update all dependencies:
+
+```bash
+go get -u ./...
+go mod tidy
+```
+
+## Optional modules
+
+go_logs uses a hybrid architecture with optional modules for advanced features:
+
+### Async logging
+
+For non-blocking logging with buffered channels:
+
+```bash
+go get github.com/drossan/go_logs/async
+```
+
+### HTTP endpoints
+
+For dynamic log level control via HTTP:
+
+```bash
+go get github.com/drossan/go_logs/http
+```
+
+### Signal handlers
+
+For SIGHUP-based log rotation:
+
+```bash
+go get github.com/drossan/go_logs/signal
+```
+
+### OpenTelemetry
+
+For sending logs to OTLP collectors:
+
+```bash
+go get github.com/drossan/go_logs/otel
+```
+
+### Hooks
+
+For Slack, syslog, and other integrations:
+
+```bash
+go get github.com/drossan/go_logs/hooks
+```
+
+<Note>
+The core package includes all essential features. Optional modules are only needed for specific use cases.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Learn the basics with a working example
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Configure go_logs for your environment
+  </Card>
+</CardGroup>

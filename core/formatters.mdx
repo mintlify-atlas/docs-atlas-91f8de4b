@@ -1,0 +1,433 @@
+---
+title: "Formatters"
+description: "Choose between TextFormatter (development) and JSONFormatter (production)"
+---
+
+## Overview
+
+Formatters convert log entries into bytes for output. go_logs provides two built-in formatters:
+
+- **TextFormatter**: Human-readable with ANSI colors for development
+- **JSONFormatter**: Structured JSON for log aggregators (ELK, Loki, Datadog)
+
+Both formatters implement the `Formatter` interface and are thread-safe.
+
+## Formatter Interface
+
+All formatters implement this interface:
+
+```go formatter.go
+type Formatter interface {
+    // Format converts a log Entry to bytes for writing to output.
+    // Returns an error if formatting fails (e.g., JSON encoding error).
+    Format(entry *Entry) ([]byte, error)
+}
+```
+
+## TextFormatter
+
+The **TextFormatter** produces human-readable output with optional ANSI colors. Ideal for development and debugging.
+
+### Output Format
+
+```
+[TIMESTAMP] LEVEL message key=value key2=value2
+```
+
+**Example**:
+```
+[2026/03/03 10:30:00] INFO connection established host=db.example.com port=5432
+```
+
+### Basic Usage
+
+```go
+import "github.com/drossan/go_logs"
+
+// Default TextFormatter with colors
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewTextFormatter()),
+)
+
+logger.Info("Server started", go_logs.Int("port", 8080))
+```
+
+### Default Configuration
+
+```go
+go_logs.NewTextFormatter()
+// Equivalent to:
+go_logs.NewTextFormatterWithConfig(go_logs.FormatterConfig{
+    EnableColors:    true,
+    EnableTimestamp: true,
+    EnableLevel:     true,
+    TimestampFormat: "2006/01/02 15:04:05",
+})
+```
+
+### Color Mapping
+
+TextFormatter uses [fatih/color](https://github.com/fatih/color) for ANSI colors:
+
+<Tabs>
+  <Tab title="Level Colors">
+    | Level | Color |
+    |-------|-------|
+    | Trace | Cyan |
+    | Debug | HiBlue |
+    | Info | Yellow |
+    | Warn | HiYellow |
+    | Error | Red |
+    | Fatal | HiRed |
+    | Success | Green |
+  </Tab>
+  <Tab title="Implementation">
+    ```go text_formatter.go
+    levelColors: map[Level]*color.Color{
+        TraceLevel:   color.New(color.FgCyan),
+        DebugLevel:   color.New(color.FgHiBlue),
+        InfoLevel:    color.New(color.FgYellow),
+        WarnLevel:    color.New(color.FgHiYellow),
+        ErrorLevel:   color.New(color.FgRed),
+        FatalLevel:   color.New(color.FgHiRed),
+        SuccessLevel: color.New(color.FgGreen),
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Custom Configuration
+
+```go
+// Disable colors (useful for file output or CI/CD)
+textFormatter := go_logs.NewTextFormatter()
+textFormatter.SetEnableColors(false)
+textFormatter.SetTimestampFormat("2006-01-02 15:04:05.000")
+
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(textFormatter),
+)
+```
+
+### Field Formatting
+
+TextFormatter formats fields as `key=value` pairs:
+
+- **Strings with spaces**: Quoted with double quotes
+  ```
+  message="hello world"
+  ```
+- **Strings without spaces**: Unquoted
+  ```
+  status=success
+  ```
+- **Errors**: Uses `.Error()` method
+  ```
+  error=connection refused
+  ```
+- **Other types**: Uses `fmt.Sprintf("%v")`
+  ```
+  count=42 rate=3.14 enabled=true
+  ```
+
+### Methods
+
+```go
+textFormatter := go_logs.NewTextFormatter()
+
+// Toggle colors
+textFormatter.SetEnableColors(true)   // Enable ANSI colors
+textFormatter.SetEnableColors(false)  // Disable colors
+
+// Toggle timestamp
+textFormatter.SetEnableTimestamp(true)  // Include timestamp
+textFormatter.SetEnableTimestamp(false) // Omit timestamp
+
+// Toggle level
+textFormatter.SetEnableLevel(true)  // Include level
+textFormatter.SetEnableLevel(false) // Omit level
+
+// Custom timestamp format
+textFormatter.SetTimestampFormat("2006-01-02 15:04:05.000")
+```
+
+## JSONFormatter
+
+The **JSONFormatter** produces structured JSON output. Ideal for production environments with log aggregators.
+
+### Output Format
+
+Single-line JSON (one entry per line):
+
+```json
+{"timestamp":"2026-03-03T10:30:00Z","level":"INFO","message":"connection established","fields":{"host":"db.example.com","port":5432}}
+```
+
+### Basic Usage
+
+```go
+import "github.com/drossan/go_logs"
+
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+)
+
+logger.Info("Server started",
+    go_logs.Int("port", 8080),
+    go_logs.String("env", "production"),
+)
+```
+
+### Default Configuration
+
+```go
+go_logs.NewJSONFormatter()
+// Equivalent to:
+go_logs.NewJSONFormatterWithConfig(go_logs.FormatterConfig{
+    EnableTimestamp: true,
+    EnableLevel:     true,
+    TimestampFormat: time.RFC3339,  // ISO 8601 format
+})
+```
+
+<Note>
+  JSONFormatter uses **RFC3339** timestamp format by default for maximum compatibility with log aggregators.
+</Note>
+
+### JSON Structure
+
+The `JSONLogEntry` struct defines the output format:
+
+```go json_formatter.go
+type JSONLogEntry struct {
+    Timestamp  string                 `json:"timestamp,omitempty"`
+    Level      string                 `json:"level,omitempty"`
+    Message    string                 `json:"message"`
+    Fields     map[string]interface{} `json:"fields,omitempty"`
+    Caller     string                 `json:"caller,omitempty"`
+    CallerFunc string                 `json:"caller_func,omitempty"`
+    StackTrace string                 `json:"stack_trace,omitempty"`
+}
+```
+
+**Example output**:
+```json
+{
+  "timestamp": "2026-03-03T10:30:00Z",
+  "level": "INFO",
+  "message": "Request processed",
+  "fields": {
+    "method": "GET",
+    "path": "/api/users",
+    "status_code": 200,
+    "duration_ms": 45.3
+  },
+  "caller": "main.go:123",
+  "caller_func": "main.handleRequest"
+}
+```
+
+### Custom Configuration
+
+```go
+jsonFormatter := go_logs.NewJSONFormatter()
+
+// Use custom timestamp format
+jsonFormatter.SetTimestampFormat("2006-01-02T15:04:05.000Z07:00")
+
+// Disable timestamp
+jsonFormatter.SetEnableTimestamp(false)
+
+// Disable level
+jsonFormatter.SetEnableLevel(false)
+
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(jsonFormatter),
+)
+```
+
+### Error Handling
+
+Errors are automatically converted to strings in JSON:
+
+```go json_formatter.go
+if field.Type() == ErrorType {
+    if err, ok := field.Value().(error); ok && err != nil {
+        jsonEntry.Fields[field.Key()] = err.Error()
+    } else {
+        jsonEntry.Fields[field.Key()] = nil
+    }
+}
+```
+
+**Example**:
+```go
+logger.Error("Database error", go_logs.Err(errors.New("connection refused")))
+```
+
+**Output**:
+```json
+{"timestamp":"2026-03-03T10:30:00Z","level":"ERROR","message":"Database error","fields":{"error":"connection refused"}}
+```
+
+### Methods
+
+```go
+jsonFormatter := go_logs.NewJSONFormatter()
+
+// Toggle timestamp
+jsonFormatter.SetEnableTimestamp(true)  // Include timestamp
+jsonFormatter.SetEnableTimestamp(false) // Omit timestamp
+
+// Toggle level
+jsonFormatter.SetEnableLevel(true)  // Include level
+jsonFormatter.SetEnableLevel(false) // Omit level
+
+// Custom timestamp format
+jsonFormatter.SetTimestampFormat(time.RFC3339Nano)
+```
+
+## Formatter Configuration
+
+Both formatters support the `FormatterConfig` struct:
+
+```go formatter.go
+type FormatterConfig struct {
+    // EnableColors enables ANSI color codes (TextFormatter only)
+    EnableColors bool
+
+    // EnableTimestamp includes timestamp in output
+    EnableTimestamp bool
+
+    // EnableLevel includes log level in output
+    EnableLevel bool
+
+    // TimestampFormat is the format string for timestamps
+    // See https://pkg.go.dev/time#pkg-constants
+    TimestampFormat string
+}
+```
+
+## Environment Variable Configuration
+
+The formatter is loaded automatically from the `LOG_FORMAT` environment variable:
+
+```bash
+# Use TextFormatter (default)
+export LOG_FORMAT=text
+
+# Use JSONFormatter
+export LOG_FORMAT=json
+```
+
+```go
+// Automatically uses LOG_FORMAT
+logger, _ := go_logs.New()  // Uses formatter from environment
+```
+
+## Choosing a Formatter
+
+<AccordionGroup>
+  <Accordion title="Use TextFormatter when...">
+    - Developing locally and reading logs in terminal
+    - Debugging issues interactively
+    - Running in non-production environments
+    - Colors improve readability (TTY output)
+    - Human readability is more important than machine parsing
+  </Accordion>
+
+  <Accordion title="Use JSONFormatter when...">
+    - Deploying to production with log aggregators
+    - Integrating with ELK, Loki, Datadog, Splunk, etc.
+    - Need machine-readable, structured logs
+    - Running in containers/Kubernetes
+    - Need to query/filter logs by specific fields
+    - Colors are not needed (non-TTY output)
+  </Accordion>
+</AccordionGroup>
+
+## Performance
+
+Both formatters are highly optimized:
+
+| Formatter | Benchmark | Target |
+|-----------|-----------|--------|
+| TextFormatter | 220.6 ns/op | < 500 ns |
+| JSONFormatter | 249.3 ns/op | < 1 µs |
+
+<Note>
+  JSONFormatter is only slightly slower than TextFormatter despite JSON encoding overhead.
+</Note>
+
+## Real-World Examples
+
+### Development Setup
+
+```go
+func createDevLogger() (go_logs.Logger, error) {
+    textFormatter := go_logs.NewTextFormatter()
+    textFormatter.SetEnableColors(true)
+    textFormatter.SetTimestampFormat("15:04:05.000")  // Short format
+    
+    return go_logs.New(
+        go_logs.WithLevel(go_logs.DebugLevel),
+        go_logs.WithFormatter(textFormatter),
+    )
+}
+```
+
+### Production Setup
+
+```go
+func createProdLogger() (go_logs.Logger, error) {
+    return go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithOutput(os.Stdout),  // Container stdout
+    )
+}
+```
+
+### Environment-Based Selection
+
+```go
+func createLogger() (go_logs.Logger, error) {
+    var formatter go_logs.Formatter
+    
+    if os.Getenv("ENVIRONMENT") == "production" {
+        formatter = go_logs.NewJSONFormatter()
+    } else {
+        formatter = go_logs.NewTextFormatter()
+    }
+    
+    return go_logs.New(
+        go_logs.WithFormatter(formatter),
+    )
+}
+```
+
+### File Output Without Colors
+
+```go
+// Disable colors for file output
+textFormatter := go_logs.NewTextFormatter()
+textFormatter.SetEnableColors(false)
+
+file, _ := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(textFormatter),
+    go_logs.WithOutput(file),
+)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Child Loggers" icon="sitemap" href="/core/child-loggers">
+    Create child loggers with inherited fields
+  </Card>
+  <Card title="Rotating Files" icon="rotate" href="/features/rotating-files">
+    Write logs to rotating files
+  </Card>
+</CardGroup>

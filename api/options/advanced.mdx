@@ -1,0 +1,468 @@
+---
+title: 'Advanced Options'
+description: 'Hooks, redaction, and extensibility options for go_logs'
+---
+
+## Overview
+
+Advanced options provide extensibility and security features including hooks for processing log entries and automatic redaction of sensitive data.
+
+## WithHooks
+
+Adds hooks to the logger for processing log entries.
+
+### Signature
+
+```go
+func WithHooks(hooks ...Hook) Option
+```
+
+### Parameters
+
+- `hooks` (...Hook): Variable number of hook implementations
+
+### Returns
+
+- `Option`: A configuration option that registers hooks
+
+### Type Definition
+
+```go
+type HooksOption struct {
+    Hooks []Hook
+}
+
+type Hook interface {
+    Run(entry *Entry) error
+}
+```
+
+### Description
+
+Hooks provide an extension point for processing log entries after they're created but before they're formatted and written. Common use cases:
+
+- Send critical errors to external services (Slack, PagerDuty)
+- Collect metrics and statistics
+- Filter or modify log entries
+- Trigger alerts based on log content
+- Integrate with monitoring systems
+
+### Examples
+
+#### Simple Function Hook
+
+```go
+// Create a hook from a function
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    if entry.Level >= go_logs.ErrorLevel {
+        fmt.Printf("ERROR DETECTED: %s\n", entry.Message)
+    }
+    return nil
+})
+
+logger, _ := go_logs.New(
+    go_logs.WithHooks(hook),
+)
+```
+
+#### Custom Hook Implementation
+
+```go
+// Custom hook for metrics collection
+type MetricsHook struct {
+    errorCount int64
+}
+
+func (h *MetricsHook) Run(entry *go_logs.Entry) error {
+    if entry.Level >= go_logs.ErrorLevel {
+        atomic.AddInt64(&h.errorCount, 1)
+    }
+    return nil
+}
+
+metricsHook := &MetricsHook{}
+logger, _ := go_logs.New(
+    go_logs.WithHooks(metricsHook),
+)
+```
+
+#### Slack Notification Hook
+
+```go
+// Send errors to Slack
+import "github.com/drossan/go_logs/hooks"
+
+slackHook := hooks.NewSlackHook(
+    "xoxb-your-token",
+    "C123456",        // Channel ID
+    go_logs.ErrorLevel, // Only send errors and above
+)
+
+logger, _ := go_logs.New(
+    go_logs.WithHooks(slackHook),
+)
+
+logger.Error("Database connection failed") // Sends to Slack
+```
+
+#### Multiple Hooks
+
+```go
+// Combine multiple hooks
+metricsHook := &MetricsHook{}
+alertHook := &AlertHook{}
+auditHook := &AuditHook{}
+
+logger, _ := go_logs.New(
+    go_logs.WithHooks(metricsHook, alertHook, auditHook),
+)
+
+// All hooks are called for each log entry
+logger.Error("Critical error")
+```
+
+### Hook Execution
+
+- Hooks are executed in the order they were registered
+- If a hook returns an error, logging continues (the error is ignored)
+- Hooks are called synchronously before the log entry is written
+
+### Performance
+
+Hooks add overhead to each log call. Keep hook logic lightweight or use level filtering within the hook.
+
+---
+
+## WithRedactor
+
+Enables redaction of sensitive fields.
+
+### Signature
+
+```go
+func WithRedactor(keys ...string) Option
+```
+
+### Parameters
+
+- `keys` (...string): Field names to redact
+
+### Returns
+
+- `Option`: A configuration option that enables field redaction
+
+### Type Definition
+
+```go
+type RedactorOption struct {
+    Keys []string
+}
+```
+
+### Description
+
+Automatically masks values of specified fields to prevent sensitive data from appearing in logs. Redacted values are replaced with `***`.
+
+### Examples
+
+```go
+// Redact specific fields
+logger, _ := go_logs.New(
+    go_logs.WithRedactor("password", "api_key", "credit_card"),
+)
+
+logger.Info("User login attempt",
+    go_logs.String("username", "john"),
+    go_logs.String("password", "secret123"),
+)
+// Output: username=john password=***
+```
+
+```go
+// Redact multiple sensitive fields
+logger, _ := go_logs.New(
+    go_logs.WithRedactor(
+        "password",
+        "token",
+        "api_key",
+        "secret",
+        "authorization",
+        "ssn",
+    ),
+)
+
+logger.Info("API request",
+    go_logs.String("endpoint", "/api/users"),
+    go_logs.String("api_key", "sk_live_abc123"),
+    go_logs.String("token", "eyJhbGc..."),
+)
+// Output: endpoint=/api/users api_key=*** token=***
+```
+
+### Security Note
+
+Redaction happens at the field level. Field names must match exactly (case-sensitive).
+
+---
+
+## WithCommonRedaction
+
+Enables redaction of common sensitive fields.
+
+### Signature
+
+```go
+func WithCommonRedaction() Option
+```
+
+### Returns
+
+- `Option`: A configuration option that redacts common sensitive fields
+
+### Description
+
+Convenience option that automatically redacts commonly sensitive field names. This is equivalent to calling `WithRedactor` with a predefined list of sensitive keys.
+
+### Redacted Fields
+
+The following field names are automatically redacted:
+
+- `password`, `passwd`, `pwd`
+- `token`, `api_key`, `apikey`, `api-key`
+- `secret`, `authorization`, `auth`
+- `cookie`, `session`
+- `credit_card`, `ssn`, `social_security`
+
+### Examples
+
+```go
+// Enable common redaction
+logger, _ := go_logs.New(
+    go_logs.WithCommonRedaction(),
+)
+
+logger.Info("User authentication",
+    go_logs.String("username", "john"),
+    go_logs.String("password", "secret123"),
+    go_logs.String("token", "abc123"),
+)
+// Output: username=john password=*** token=***
+```
+
+```go
+// Combine with additional custom redaction
+logger, _ := go_logs.New(
+    go_logs.WithCommonRedaction(),
+    go_logs.WithRedactor("custom_secret", "internal_key"),
+)
+
+logger.Info("Payment processing",
+    go_logs.String("merchant_id", "12345"),
+    go_logs.String("credit_card", "4111-1111-1111-1111"),
+    go_logs.String("custom_secret", "xyz789"),
+)
+// Output: merchant_id=12345 credit_card=*** custom_secret=***
+```
+
+### Best Practices
+
+```go
+// Production logger with security defaults
+logger, err := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithCommonRedaction(), // Security by default
+    go_logs.WithRotatingFile("/var/log/app.log", 100, 10),
+)
+```
+
+---
+
+## Helper Functions
+
+### NewFuncHook
+
+Creates a Hook from a function.
+
+#### Signature
+
+```go
+func NewFuncHook(fn func(entry *Entry) error) Hook
+```
+
+#### Parameters
+
+- `fn`: Function that processes log entries
+
+#### Returns
+
+- `Hook`: A hook implementation
+
+#### Type Definition
+
+```go
+type HookFunc func(entry *Entry) error
+
+func (f HookFunc) Run(entry *Entry) error {
+    return f(entry)
+}
+```
+
+#### Examples
+
+```go
+// Simple metrics collection
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    metrics.Inc("logs.total", 1)
+    metrics.Inc(fmt.Sprintf("logs.%s", entry.Level.String()), 1)
+    return nil
+})
+
+logger, _ := go_logs.New(
+    go_logs.WithHooks(hook),
+)
+```
+
+```go
+// Alert on errors
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    if entry.Level >= go_logs.ErrorLevel {
+        alerting.Send(fmt.Sprintf("Error: %s", entry.Message))
+    }
+    return nil
+})
+```
+
+### CommonSensitiveKeys
+
+Returns a list of commonly sensitive field names.
+
+#### Signature
+
+```go
+func CommonSensitiveKeys() []string
+```
+
+#### Returns
+
+- `[]string`: List of common sensitive field names
+
+#### Example
+
+```go
+// Get the list of common sensitive keys
+keys := go_logs.CommonSensitiveKeys()
+// ["password", "passwd", "pwd", "token", "api_key", ...]
+
+// Add custom keys to the common list
+customKeys := append(go_logs.CommonSensitiveKeys(), "internal_secret")
+logger, _ := go_logs.New(
+    go_logs.WithRedactor(customKeys...),
+)
+```
+
+---
+
+## Combined Usage
+
+```go
+// Production-ready logger with all safety features
+logger, err := go_logs.New(
+    // Core configuration
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    
+    // Output
+    go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+        Filename:     "/var/log/app.log",
+        MaxSizeMB:    100,
+        MaxBackups:   10,
+        RotationType: go_logs.RotateDaily,
+        Compress:     true,
+        MaxAge:       30,
+    }),
+    
+    // Security
+    go_logs.WithCommonRedaction(),
+    go_logs.WithRedactor("internal_key", "merchant_secret"),
+    
+    // Monitoring
+    go_logs.WithHooks(
+        metricsHook,
+        slackHook,
+        auditHook,
+    ),
+    
+    // Debugging (errors only)
+    go_logs.WithCallerLevel(go_logs.ErrorLevel),
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer logger.Sync()
+```
+
+## Use Cases
+
+### Error Monitoring
+
+```go
+errorHook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    if entry.Level >= go_logs.ErrorLevel {
+        monitoring.TrackError(entry.Message, entry.Fields)
+    }
+    return nil
+})
+
+logger, _ := go_logs.New(
+    go_logs.WithHooks(errorHook),
+)
+```
+
+### Audit Logging
+
+```go
+auditHook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    if entry.HasField("user_id") {
+        auditLog.Record(entry)
+    }
+    return nil
+})
+
+logger, _ := go_logs.New(
+    go_logs.WithHooks(auditHook),
+)
+
+logger.Info("User action",
+    go_logs.String("user_id", "12345"),
+    go_logs.String("action", "delete_record"),
+)
+```
+
+### Compliance and Security
+
+```go
+// PCI-DSS compliant logging
+logger, _ := go_logs.New(
+    go_logs.WithCommonRedaction(),
+    go_logs.WithRedactor(
+        "card_number",
+        "cvv",
+        "pin",
+        "account_number",
+    ),
+    go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+        Filename:   "/secure/logs/app.log",
+        MaxAge:     90, // Retain for 90 days
+        Compress:   true,
+    }),
+)
+```
+
+## Related
+
+- [Hook Reference](/api/core/hook) - Hook interface details
+- [Entry Reference](/api/core/entry) - Log entry structure
+- [Core Options](/api/options/core) - Basic logger configuration

@@ -1,0 +1,378 @@
+---
+title: "Logger Interface"
+description: "The main logging interface for go_logs v3"
+---
+
+## Overview
+
+The `Logger` interface is the primary interface for all logging operations in go_logs v3. It enables dependency injection and allows multiple logger instances with different configurations.
+
+## Interface Definition
+
+```go
+type Logger interface {
+    // Core logging methods
+    Log(level Level, msg string, fields ...Field)
+    LogCtx(ctx context.Context, level Level, msg string, fields ...Field)
+
+    // Convenience methods for each level
+    Trace(msg string, fields ...Field)
+    Debug(msg string, fields ...Field)
+    Info(msg string, fields ...Field)
+    Warn(msg string, fields ...Field)
+    Error(msg string, fields ...Field)
+    Fatal(msg string, fields ...Field)
+
+    // Child logger creation
+    With(fields ...Field) Logger
+
+    // Level management
+    SetLevel(level Level)
+    GetLevel() Level
+
+    // Lifecycle
+    Sync() error
+}
+```
+
+## Creating a Logger
+
+Use the `New()` function to create a logger instance:
+
+```go
+logger, err := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithOutput(os.Stdout),
+)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+See [New()](/api/new) for detailed constructor documentation.
+
+## Core Methods
+
+### Log
+
+The fundamental logging method that all other methods are built upon.
+
+```go
+func (l Logger) Log(level Level, msg string, fields ...Field)
+```
+
+<ParamField path="level" type="Level" required>
+  The severity level (TraceLevel, DebugLevel, InfoLevel, WarnLevel, ErrorLevel, FatalLevel)
+</ParamField>
+
+<ParamField path="msg" type="string" required>
+  The log message
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Structured key-value pairs using helper functions (String(), Int(), Err(), etc.)
+</ParamField>
+
+**Example:**
+
+```go
+logger.Log(go_logs.InfoLevel, "User logged in",
+    go_logs.String("username", "john"),
+    go_logs.String("ip", "192.168.1.1"),
+)
+```
+
+### LogCtx
+
+Logs a message with context support for distributed tracing.
+
+```go
+func (l Logger) LogCtx(ctx context.Context, level Level, msg string, fields ...Field)
+```
+
+<ParamField path="ctx" type="context.Context" required>
+  The context containing tracing information (trace_id, span_id, etc.)
+</ParamField>
+
+<ParamField path="level" type="Level" required>
+  The severity level
+</ParamField>
+
+<ParamField path="msg" type="string" required>
+  The log message
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Additional structured key-value pairs
+</ParamField>
+
+**Example:**
+
+```go
+ctx := go_logs.WithTraceID(context.Background(), "trace-123")
+logger.LogCtx(ctx, go_logs.InfoLevel, "Request received",
+    go_logs.String("endpoint", "/api/users"),
+)
+// Output includes: trace_id=trace-123
+```
+
+## Convenience Methods
+
+These methods provide a simpler API for common log levels. See [Logging Methods](/api/log-methods) for details.
+
+### Trace
+
+Logs at TraceLevel for extremely detailed debugging.
+
+```go
+logger.Trace("Function called", go_logs.String("function", "processData"))
+```
+
+### Debug
+
+Logs at DebugLevel for diagnostic information.
+
+```go
+logger.Debug("Processing request", go_logs.String("endpoint", "/api/users"))
+```
+
+### Info
+
+Logs at InfoLevel for general informational messages.
+
+```go
+logger.Info("Server started", go_logs.Int("port", 8080))
+```
+
+### Warn
+
+Logs at WarnLevel for potentially harmful situations.
+
+```go
+logger.Warn("High memory usage", go_logs.Float64("usage_percent", 85.5))
+```
+
+### Error
+
+Logs at ErrorLevel for error events.
+
+```go
+logger.Error("Database connection failed",
+    go_logs.Err(err),
+    go_logs.String("host", "localhost"),
+)
+```
+
+### Fatal
+
+Logs at FatalLevel and terminates the application with `os.Exit(1)`.
+
+```go
+logger.Fatal("Cannot load config", go_logs.Err(err))
+// Program terminates here
+```
+
+<Warning>
+  Fatal() calls `os.Exit(1)` after logging. Use Error() if you want to continue execution.
+</Warning>
+
+## Child Loggers
+
+### With
+
+Creates a child logger with pre-configured fields.
+
+```go
+func (l Logger) With(fields ...Field) Logger
+```
+
+<ParamField path="fields" type="...Field" required>
+  Fields to include in all log messages from the child logger
+</ParamField>
+
+**Returns:** A new Logger instance with inherited fields. The parent logger is not modified.
+
+**Example:**
+
+```go
+// Create base logger
+baseLogger, _ := go_logs.New()
+
+// Create child logger with request context
+requestLogger := baseLogger.With(
+    go_logs.String("request_id", "abc-123"),
+    go_logs.String("user_id", "456"),
+)
+
+// All logs include request_id and user_id
+requestLogger.Info("Processing request")
+requestLogger.Info("Request complete", go_logs.Int("status", 200))
+```
+
+**Output:**
+```
+INFO Processing request request_id=abc-123 user_id=456
+INFO Request complete request_id=abc-123 user_id=456 status=200
+```
+
+## Level Management
+
+### SetLevel
+
+Changes the minimum log level threshold at runtime.
+
+```go
+func (l Logger) SetLevel(level Level)
+```
+
+<ParamField path="level" type="Level" required>
+  The new minimum level (TraceLevel, DebugLevel, InfoLevel, WarnLevel, ErrorLevel, FatalLevel, SilentLevel)
+</ParamField>
+
+**Example:**
+
+```go
+logger.SetLevel(go_logs.DebugLevel) // Enable debug logging
+logger.Debug("This will now be logged")
+
+logger.SetLevel(go_logs.ErrorLevel) // Only errors and above
+logger.Info("This will be filtered out")
+```
+
+### GetLevel
+
+Returns the current minimum log level threshold.
+
+```go
+func (l Logger) GetLevel() Level
+```
+
+**Returns:** The current Level
+
+**Example:**
+
+```go
+if logger.GetLevel() >= go_logs.DebugLevel {
+    // Perform expensive debug operations only if they'll be logged
+    debugData := collectDebugInfo()
+    logger.Debug("Debug data", go_logs.Any("data", debugData))
+}
+```
+
+## Lifecycle
+
+### Sync
+
+Flushes any buffered log entries to the output.
+
+```go
+func (l Logger) Sync() error
+```
+
+**Returns:** An error if flushing fails, nil otherwise
+
+**Example:**
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+)
+defer logger.Sync() // Ensure all logs are written before exit
+
+logger.Info("Application shutting down")
+```
+
+## Performance Features
+
+### Fast-Path Filtering
+
+The Logger checks the log level **before** any allocations or processing:
+
+```go
+// If level is below threshold, this returns immediately (< 1 ns)
+logger.Debug("expensive operation", go_logs.Any("data", expensiveFunc()))
+```
+
+**Benchmark:** 0.32 ns/op with 0 allocations for filtered messages
+
+### Zero-Allocation Fields
+
+Field creation has zero heap allocations:
+
+```go
+// No allocations for field creation
+go_logs.String("key", "value")  // 0.34 ns/op, 0 allocs
+go_logs.Int("count", 42)        // 0.34 ns/op, 0 allocs
+```
+
+## Thread Safety
+
+All Logger methods are thread-safe and can be called concurrently from multiple goroutines:
+
+```go
+logger, _ := go_logs.New()
+
+for i := 0; i < 10; i++ {
+    go func(id int) {
+        logger.Info("Goroutine message", go_logs.Int("id", id))
+    }(i)
+}
+```
+
+## Common Patterns
+
+### Service Logger
+
+```go
+type Service struct {
+    logger go_logs.Logger
+}
+
+func NewService(logger go_logs.Logger) *Service {
+    return &Service{
+        logger: logger.With(
+            go_logs.String("service", "api"),
+            go_logs.String("version", "1.0"),
+        ),
+    }
+}
+
+func (s *Service) HandleRequest(ctx context.Context) {
+    s.logger.LogCtx(ctx, go_logs.InfoLevel, "Handling request")
+}
+```
+
+### HTTP Handler with Request Logger
+
+```go
+func (s *Service) HandleHTTP(w http.ResponseWriter, r *http.Request) {
+    requestLogger := s.logger.With(
+        go_logs.String("request_id", r.Header.Get("X-Request-ID")),
+        go_logs.String("method", r.Method),
+        go_logs.String("path", r.URL.Path),
+    )
+
+    requestLogger.Info("Request started")
+    defer requestLogger.Info("Request completed")
+
+    // All logs in this request context include request_id, method, path
+    s.processRequest(requestLogger, r)
+}
+```
+
+### Conditional Debug Logging
+
+```go
+if logger.GetLevel() >= go_logs.DebugLevel {
+    // Only perform expensive operations if debug is enabled
+    debugInfo := collectExpensiveDebugData()
+    logger.Debug("Debug information", go_logs.Any("info", debugInfo))
+}
+```
+
+## See Also
+
+- [New()](/api/new) - Constructor function
+- [Logging Methods](/api/log-methods) - Detailed method documentation
+- [Configuration](/configuration) - Logger configuration options
+- [Structured Fields](/fields) - Field types and usage

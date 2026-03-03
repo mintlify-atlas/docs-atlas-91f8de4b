@@ -1,0 +1,542 @@
+---
+title: Syslog Hook
+description: Send logs to local or remote syslog servers
+---
+
+The `syslog` hook sends logs to syslog daemons (local or remote), enabling integration with traditional Unix logging infrastructure and centralized log management systems.
+
+## Features
+
+- **Local syslog** daemon integration
+- **Remote syslog** via TCP/UDP
+- **RFC5424** formatter support
+- **Priority mapping** to syslog severity levels
+- **Custom formatting** for log entries
+- **Thread-safe** operation
+
+## Installation
+
+```bash
+go get github.com/drossan/go_logs
+```
+
+The syslog hook is included in the main package at `github.com/drossan/go_logs/hooks`.
+
+## Basic Usage
+
+### Local Syslog
+
+```go
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+)
+
+func main() {
+    // Create syslog hook
+    syslogHook, err := hooks.NewSyslogHook("myapp")
+    if err != nil {
+        panic(err)
+    }
+    defer syslogHook.Close()
+
+    // Create logger with syslog hook
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHook(syslogHook),
+    )
+
+    // Logs will be sent to local syslog
+    logger.Info("Application started")
+}
+```
+
+### Remote Syslog
+
+```go
+import "github.com/drossan/go_logs/hooks"
+
+// Send to remote syslog server
+hook, err := hooks.NewNetworkSyslogHook(
+    "tcp",                    // Protocol: "tcp" or "udp"
+    "logs.example.com:514",   // Address
+    "myapp",                  // Tag
+)
+if err != nil {
+    panic(err)
+}
+defer hook.Close()
+
+logger, _ := go_logs.New(
+    go_logs.WithHook(hook),
+)
+```
+
+## Configuration
+
+### SyslogConfig
+
+```go
+type SyslogConfig struct {
+    // Network and address for remote syslog (e.g., "tcp", "logs.example.com:514")
+    Network string
+    Addr    string
+
+    // Priority is the syslog priority (facility | severity)
+    Priority syslog.Priority
+
+    // Tag is the syslog tag
+    Tag string
+
+    // Flags for the syslog writer
+    Flags int
+}
+```
+
+### Custom Configuration
+
+```go
+import "log/syslog"
+
+config := hooks.SyslogConfig{
+    Network:  "tcp",
+    Addr:     "logs.example.com:514",
+    Priority: syslog.LOG_LOCAL0 | syslog.LOG_INFO,
+    Tag:      "myapp",
+}
+
+hook, err := hooks.NewSyslogHookWithConfig(config)
+if err != nil {
+    panic(err)
+}
+```
+
+### Syslog Priorities
+
+Combine facility and severity:
+
+```go
+import "log/syslog"
+
+// Facilities
+syslog.LOG_LOCAL0  // Local use 0
+syslog.LOG_LOCAL1  // Local use 1
+// ... through LOG_LOCAL7
+syslog.LOG_USER    // User-level messages
+syslog.LOG_DAEMON  // System daemons
+
+// Severities (mapped automatically from go_logs levels)
+syslog.LOG_DEBUG
+syslog.LOG_INFO
+syslog.LOG_WARNING
+syslog.LOG_ERR
+syslog.LOG_CRIT
+
+// Example: Local0 facility with Info severity
+priority := syslog.LOG_LOCAL0 | syslog.LOG_INFO
+```
+
+## Level Mapping
+
+go_logs levels are automatically mapped to syslog severities:
+
+| go_logs Level | Syslog Severity |
+|---------------|----------------|
+| TraceLevel    | LOG_DEBUG      |
+| DebugLevel    | LOG_DEBUG      |
+| InfoLevel     | LOG_INFO       |
+| WarnLevel     | LOG_WARNING    |
+| ErrorLevel    | LOG_ERR        |
+| FatalLevel    | LOG_CRIT       |
+
+## Filtering by Level
+
+```go
+hook, _ := hooks.NewSyslogHook("myapp")
+
+// Only send INFO and above to syslog
+hook.SetLevel(go_logs.InfoLevel)
+
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel), // Log DEBUG locally
+    go_logs.WithHook(hook),                 // But only INFO+ to syslog
+)
+
+logger.Debug("Local only")      // Not sent to syslog
+logger.Info("Sent to syslog")   // Sent to syslog
+```
+
+## Custom Formatters
+
+### Default Format
+
+By default, logs are formatted as:
+```
+User logged in user_id=user-123 ip=192.168.1.1 caller=/app/main.go:42
+```
+
+### RFC5424 Format
+
+```go
+import "github.com/drossan/go_logs/hooks"
+
+hook, _ := hooks.NewSyslogHook("myapp")
+
+// Use RFC5424 structured data format
+hook.SetFormatter(hooks.RFC5424Formatter("myapp"))
+
+logger, _ := go_logs.New(
+    go_logs.WithHook(hook),
+)
+
+// Produces:
+// [meta@12345 app="myapp" level="INFO" user_id="user-123"] User logged in
+```
+
+### Custom Formatter
+
+```go
+hook, _ := hooks.NewSyslogHook("myapp")
+
+// Define custom format
+hook.SetFormatter(func(entry *go_logs.Entry) string {
+    // Simple format: "LEVEL: message"
+    msg := fmt.Sprintf("%s: %s", entry.Level.String(), entry.Message)
+    
+    // Add first field only
+    if len(entry.Fields) > 0 {
+        f := entry.Fields[0]
+        msg += fmt.Sprintf(" [%s=%v]", f.Key(), f.Value())
+    }
+    
+    return msg
+})
+```
+
+## Complete Examples
+
+### Application with Local Syslog
+
+```go
+package main
+
+import (
+    "log/syslog"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+)
+
+func main() {
+    // Configure syslog hook with LOCAL0 facility
+    config := hooks.SyslogConfig{
+        Priority: syslog.LOG_LOCAL0 | syslog.LOG_INFO,
+        Tag:      "myapp",
+    }
+    
+    syslogHook, err := hooks.NewSyslogHookWithConfig(config)
+    if err != nil {
+        panic(err)
+    }
+    defer syslogHook.Close()
+
+    // Send only WARN and above to syslog
+    syslogHook.SetLevel(go_logs.WarnLevel)
+
+    // Create logger with both console and syslog output
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewTextFormatter()),
+        go_logs.WithHook(syslogHook),
+    )
+
+    logger.Info("Application started")  // Console only
+    logger.Warn("High memory usage")    // Console + syslog
+    logger.Error("Database error")      // Console + syslog
+}
+```
+
+### Centralized Logging
+
+```go
+package main
+
+import (
+    "os"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+)
+
+func main() {
+    // Connect to remote syslog server
+    syslogHook, err := hooks.NewNetworkSyslogHook(
+        "tcp",
+        os.Getenv("SYSLOG_SERVER"), // e.g., "logs.example.com:514"
+        "myapp",
+    )
+    if err != nil {
+        panic(err)
+    }
+    defer syslogHook.Close()
+
+    // Use RFC5424 format for structured data
+    syslogHook.SetFormatter(hooks.RFC5424Formatter("myapp"))
+
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithRotatingFile("/var/log/myapp.log", 100, 5),
+        go_logs.WithHook(syslogHook),
+    )
+
+    // Logs go to:
+    // 1. Local file (/var/log/myapp.log) as JSON
+    // 2. Remote syslog server as RFC5424
+    logger.Info("Server started",
+        go_logs.Int("port", 8080),
+        go_logs.String("version", "1.0.0"),
+    )
+}
+```
+
+### Multiple Syslog Destinations
+
+```go
+// Local syslog for all logs
+localHook, _ := hooks.NewSyslogHook("myapp")
+localHook.SetLevel(go_logs.InfoLevel)
+
+// Remote syslog for errors only
+remoteHook, _ := hooks.NewNetworkSyslogHook(
+    "tcp",
+    "critical-logs.example.com:514",
+    "myapp-errors",
+)
+remoteHook.SetLevel(go_logs.ErrorLevel)
+
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel),
+    go_logs.WithHook(localHook),  // INFO+ to local syslog
+    go_logs.WithHook(remoteHook), // ERROR+ to remote syslog
+)
+
+logger.Debug("Debug info")         // Console only
+logger.Info("User login")          // Console + local syslog
+logger.Error("Payment failed")     // Console + local + remote syslog
+```
+
+## rsyslog Configuration
+
+### Receive Logs from Application
+
+Edit `/etc/rsyslog.conf`:
+
+```conf
+# Enable TCP syslog reception
+module(load="imtcp")
+input(type="imtcp" port="514")
+
+# Filter logs from myapp (LOCAL0)
+local0.* /var/log/myapp.log
+
+# Errors to separate file
+local0.err /var/log/myapp-errors.log
+```
+
+Restart rsyslog:
+```bash
+sudo systemctl restart rsyslog
+```
+
+### Forward to Remote Server
+
+```conf
+# Forward all LOCAL0 logs to remote server
+local0.* @@logs.example.com:514  # TCP
+# or
+local0.* @logs.example.com:514   # UDP
+```
+
+## systemd Journal Integration
+
+Logs sent to syslog are automatically captured by systemd:
+
+```bash
+# View logs from your app
+journalctl -t myapp
+
+# Follow logs
+journalctl -t myapp -f
+
+# Filter by priority
+journalctl -t myapp -p err
+
+# Show JSON format
+journalctl -t myapp -o json-pretty
+```
+
+## Docker Integration
+
+### Syslog Logging Driver
+
+```yaml
+version: '3.8'
+
+services:
+  app:
+    image: myapp:latest
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "tcp://logs.example.com:514"
+        tag: "{{.Name}}/{{.ID}}"
+```
+
+### Application with Syslog Hook
+
+```dockerfile
+FROM golang:1.21 AS builder
+WORKDIR /app
+COPY . .
+RUN go build -o myapp
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y rsyslog
+
+COPY --from=builder /app/myapp /usr/local/bin/
+
+# Start rsyslog and application
+CMD rsyslog && /usr/local/bin/myapp
+```
+
+## Kubernetes
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rsyslog-config
+data:
+  rsyslog.conf: |
+    module(load="imtcp")
+    input(type="imtcp" port="514")
+    *.* /var/log/messages
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp
+spec:
+  containers:
+  # Application container
+  - name: app
+    image: myapp:latest
+    env:
+    - name: SYSLOG_SERVER
+      value: "localhost:514"
+  
+  # Syslog sidecar
+  - name: rsyslog
+    image: rsyslog/syslog_appliance_alpine:latest
+    volumeMounts:
+    - name: config
+      mountPath: /etc/rsyslog.conf
+      subPath: rsyslog.conf
+    - name: logs
+      mountPath: /var/log
+  
+  volumes:
+  - name: config
+    configMap:
+      name: rsyslog-config
+  - name: logs
+    emptyDir: {}
+```
+
+## Troubleshooting
+
+### Connection Refused
+
+```go
+// Check if syslog daemon is running
+// Linux:
+sudo systemctl status rsyslog
+
+// macOS:
+sudo launchctl list | grep syslog
+```
+
+### Permission Denied
+
+```bash
+# Ensure user can write to syslog socket
+ls -la /dev/log
+
+# Add user to syslog group
+sudo usermod -a -G syslog myuser
+```
+
+### Remote Connection Issues
+
+```bash
+# Test connectivity
+telnet logs.example.com 514
+
+# Check firewall
+sudo ufw allow 514/tcp
+
+# Verify rsyslog is listening
+sudo netstat -tlnp | grep 514
+```
+
+### Logs Not Appearing
+
+```go
+// Enable debug logging in hook
+import "log"
+
+// Check syslog files
+tail -f /var/log/syslog
+tail -f /var/log/messages
+
+// Check hook configuration
+fmt.Printf("Hook level: %v\n", syslogHook.minLevel)
+```
+
+## Best Practices
+
+1. **Use appropriate facilities**
+   ```go
+   // System daemon
+   Priority: syslog.LOG_DAEMON | syslog.LOG_INFO
+   
+   // User application
+   Priority: syslog.LOG_USER | syslog.LOG_INFO
+   ```
+
+2. **Filter by level** to reduce syslog volume
+   ```go
+   hook.SetLevel(go_logs.WarnLevel)
+   ```
+
+3. **Use TCP** for remote syslog (reliable delivery)
+   ```go
+   hooks.NewNetworkSyslogHook("tcp", addr, tag)
+   ```
+
+4. **Tag with application name** for filtering
+   ```go
+   hooks.NewSyslogHook("myapp-v1.2.3")
+   ```
+
+5. **Close hooks** on shutdown
+   ```go
+   defer syslogHook.Close()
+   ```
+
+## See Also
+
+- [Hooks](/advanced/hooks) - Hook system overview
+- [Formatters](/core/formatters) - Log formatting
+- [Production Setup](/guides/production) - Deployment guide

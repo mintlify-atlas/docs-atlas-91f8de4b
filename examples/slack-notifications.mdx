@@ -1,0 +1,413 @@
+---
+title: 'Slack Notifications'
+description: 'Send critical logs to Slack channels using hooks'
+icon: 'slack'
+---
+
+## Basic Slack Hook
+
+Send error and fatal logs to Slack:
+
+```go
+package main
+
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+    "github.com/drossan/go_logs/adapters"
+)
+
+func main() {
+    // Create Slack notifier
+    slackNotifier, err := adapters.NewSlackNotifier()
+    if err != nil {
+        panic(err)
+    }
+    
+    // Create Slack hook (only send Error and Fatal levels)
+    slackHook := hooks.NewSlackHook(slackNotifier, go_logs.ErrorLevel)
+    
+    // Create logger with Slack hook
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHook(slackHook),
+    )
+    
+    // These won't go to Slack (below ErrorLevel)
+    logger.Info("Application started")  // Not sent to Slack
+    logger.Warn("High memory usage")     // Not sent to Slack
+    
+    // These will be sent to Slack
+    logger.Error("Database connection failed",
+        go_logs.String("host", "db.example.com"),
+        go_logs.Int("port", 5432),
+    )
+    
+    logger.Fatal("Critical system failure",
+        go_logs.String("component", "payment-processor"),
+    )
+}
+```
+
+## Configuration via Environment Variables
+
+Configure Slack integration using environment variables:
+
+```bash
+# Set Slack credentials
+export SLACK_TOKEN="xoxb-your-bot-token"
+export SLACK_CHANNEL_ID="C123456789"
+```
+
+```go
+package main
+
+import (
+    "os"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+    "github.com/drossan/go_logs/adapters"
+)
+
+func main() {
+    // Slack notifier reads from environment variables
+    // SLACK_TOKEN and SLACK_CHANNEL_ID
+    slackNotifier, err := adapters.NewSlackNotifier()
+    if err != nil {
+        // Handle gracefully - app continues without Slack
+        logger, _ := go_logs.New()
+        logger.Warn("Slack notifications disabled", go_logs.Err(err))
+        return
+    }
+    
+    slackHook := hooks.NewSlackHook(slackNotifier, go_logs.ErrorLevel)
+    
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHook(slackHook),
+    )
+    
+    logger.Error("Payment processing failed",
+        go_logs.String("transaction_id", "tx-12345"),
+        go_logs.Float64("amount", 99.99),
+    )
+}
+```
+
+**Slack Message Format:**
+```
+[ERROR] Payment processing failed transaction_id=tx-12345 amount=99.99
+```
+
+## Dynamic Slack Level Control
+
+Change which levels get sent to Slack at runtime:
+
+```go
+package main
+
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+    "github.com/drossan/go_logs/adapters"
+)
+
+func main() {
+    slackNotifier, _ := adapters.NewSlackNotifier()
+    slackHook := hooks.NewSlackHook(slackNotifier, go_logs.ErrorLevel)
+    
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHook(slackHook),
+    )
+    
+    // Initially only errors are sent to Slack
+    logger.Warn("Warning message")   // Not sent
+    logger.Error("Error message")     // Sent to Slack
+    
+    // During incident - send warnings too
+    slackHook.SetLevel(go_logs.WarnLevel)
+    
+    logger.Warn("Another warning")  // Now sent to Slack
+    
+    // After incident - back to errors only
+    slackHook.SetLevel(go_logs.ErrorLevel)
+}
+```
+
+## Production Setup with Error Grouping
+
+Group similar errors to avoid Slack spam:
+
+```go
+package main
+
+import (
+    "sync"
+    "time"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+)
+
+// RateLimitedSlackHook wraps SlackHook with rate limiting
+type RateLimitedSlackHook struct {
+    hook     *hooks.SlackHook
+    mu       sync.Mutex
+    lastSent map[string]time.Time
+    interval time.Duration
+}
+
+func NewRateLimitedSlackHook(hook *hooks.SlackHook, interval time.Duration) *RateLimitedSlackHook {
+    return &RateLimitedSlackHook{
+        hook:     hook,
+        lastSent: make(map[string]time.Time),
+        interval: interval,
+    }
+}
+
+func (h *RateLimitedSlackHook) Run(entry *go_logs.Entry) error {
+    h.mu.Lock()
+    defer h.mu.Unlock()
+    
+    // Use message as deduplication key
+    key := entry.Message
+    
+    // Check if we sent this message recently
+    if lastTime, exists := h.lastSent[key]; exists {
+        if time.Since(lastTime) < h.interval {
+            // Skip - sent too recently
+            return nil
+        }
+    }
+    
+    // Send to Slack
+    if err := h.hook.Run(entry); err != nil {
+        return err
+    }
+    
+    // Update last sent time
+    h.lastSent[key] = time.Now()
+    
+    return nil
+}
+
+func main() {
+    slackNotifier, _ := adapters.NewSlackNotifier()
+    baseHook := hooks.NewSlackHook(slackNotifier, go_logs.ErrorLevel)
+    
+    // Only send same error once per 5 minutes
+    slackHook := NewRateLimitedSlackHook(baseHook, 5*time.Minute)
+    
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHook(slackHook),
+    )
+    
+    // First error is sent
+    logger.Error("Database connection failed")
+    
+    // Subsequent errors within 5 minutes are suppressed
+    logger.Error("Database connection failed")  // Not sent
+    logger.Error("Database connection failed")  // Not sent
+    
+    // After 5 minutes, will be sent again
+}
+```
+
+## Multi-Channel Slack Notifications
+
+Send different severity levels to different channels:
+
+```go
+package main
+
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+    "github.com/drossan/go_logs/adapters"
+)
+
+func main() {
+    // Create notifiers for different channels
+    errorsNotifier, _ := adapters.NewSlackNotifierWithChannel(
+        "xoxb-token",
+        "C123456789", // #errors channel
+    )
+    
+    criticalNotifier, _ := adapters.NewSlackNotifierWithChannel(
+        "xoxb-token",
+        "C987654321", // #critical channel
+    )
+    
+    // Errors go to #errors channel
+    errorsHook := hooks.NewSlackHook(errorsNotifier, go_logs.ErrorLevel)
+    
+    // Fatal logs go to #critical channel
+    criticalHook := hooks.NewSlackHook(criticalNotifier, go_logs.FatalLevel)
+    
+    // Register both hooks
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHooks(errorsHook, criticalHook),
+    )
+    
+    logger.Error("API timeout")              // Goes to #errors
+    logger.Fatal("Payment system down")      // Goes to both #errors and #critical
+}
+```
+
+## Slack Notifications with Rich Context
+
+Include detailed context in Slack messages:
+
+```go
+package main
+
+import (
+    "os"
+    "runtime"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+    "github.com/drossan/go_logs/adapters"
+)
+
+func main() {
+    slackNotifier, _ := adapters.NewSlackNotifier()
+    slackHook := hooks.NewSlackHook(slackNotifier, go_logs.ErrorLevel)
+    
+    // Create logger with service context
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHook(slackHook),
+    )
+    
+    // Add service-level fields
+    serviceLogger := logger.With(
+        go_logs.String("service", "payment-api"),
+        go_logs.String("version", "1.2.3"),
+        go_logs.String("environment", "production"),
+        go_logs.String("hostname", getHostname()),
+    )
+    
+    // Error with rich context
+    serviceLogger.Error("Payment processing failed",
+        go_logs.String("user_id", "user-123"),
+        go_logs.String("transaction_id", "tx-456"),
+        go_logs.Float64("amount", 99.99),
+        go_logs.String("payment_method", "credit_card"),
+        go_logs.Int("retry_count", 3),
+    )
+}
+
+func getHostname() string {
+    hostname, _ := os.Hostname()
+    return hostname
+}
+```
+
+**Slack Message:**
+```
+[ERROR] Payment processing failed service=payment-api version=1.2.3 environment=production hostname=prod-server-1 user_id=user-123 transaction_id=tx-456 amount=99.99 payment_method=credit_card retry_count=3
+```
+
+## Testing Slack Integration
+
+Test Slack hooks without spamming production channels:
+
+```go
+package main
+
+import (
+    "testing"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+)
+
+// MockSlackNotifier for testing
+type MockSlackNotifier struct {
+    Messages []string
+}
+
+func (m *MockSlackNotifier) SendNotification(message string) error {
+    m.Messages = append(m.Messages, message)
+    return nil
+}
+
+func TestSlackHook(t *testing.T) {
+    mock := &MockSlackNotifier{}
+    hook := hooks.NewSlackHook(mock, go_logs.ErrorLevel)
+    
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHook(hook),
+    )
+    
+    // Log an error
+    logger.Error("Test error",
+        go_logs.String("key", "value"),
+    )
+    
+    // Verify message was sent
+    if len(mock.Messages) != 1 {
+        t.Errorf("Expected 1 message, got %d", len(mock.Messages))
+    }
+    
+    if !strings.Contains(mock.Messages[0], "Test error") {
+        t.Errorf("Message doesn't contain expected text: %s", mock.Messages[0])
+    }
+}
+```
+
+## Graceful Degradation
+
+Handle Slack failures without affecting application:
+
+```go
+package main
+
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/hooks"
+    "github.com/drossan/go_logs/adapters"
+)
+
+func main() {
+    // Try to create Slack notifier
+    slackNotifier, err := adapters.NewSlackNotifier()
+    
+    var opts []go_logs.Option
+    opts = append(opts, go_logs.WithLevel(go_logs.InfoLevel))
+    
+    if err == nil {
+        // Slack is configured - add hook
+        slackHook := hooks.NewSlackHook(slackNotifier, go_logs.ErrorLevel)
+        opts = append(opts, go_logs.WithHook(slackHook))
+    }
+    
+    logger, _ := go_logs.New(opts...)
+    
+    if err != nil {
+        logger.Warn("Slack notifications disabled - missing credentials")
+    } else {
+        logger.Info("Slack notifications enabled")
+    }
+    
+    // Application continues normally
+    logger.Error("An error occurred")  // Sent to Slack if available
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Hooks System" icon="plug" href="/core-features/hooks">
+    Learn more about the hooks system
+  </Card>
+  <Card title="Production Setup" icon="rocket" href="/examples/production-setup">
+    Complete production configuration
+  </Card>
+</CardGroup>

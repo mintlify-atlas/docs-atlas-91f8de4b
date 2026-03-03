@@ -1,0 +1,592 @@
+---
+title: 'SamplingWriter'
+description: 'Rate-limited log writer to prevent flooding'
+---
+
+## Overview
+
+`SamplingWriter` wraps an `io.Writer` with rate limiting to prevent log flooding. It allows a maximum number of messages per time interval, dropping excess messages.
+
+This is useful for high-volume logs where you want to prevent disk I/O or network overload while still capturing representative samples.
+
+## Type Definitions
+
+### Sampler
+
+Controls the rate of log messages.
+
+```go
+type Sampler struct {
+    threshold  int           // Maximum messages per interval
+    interval   time.Duration // Time window for counting
+    mu         sync.Mutex    // Protects counter state
+    count      int           // Messages in current interval
+    lastReset  time.Time     // When interval started
+}
+```
+
+### SamplingWriter
+
+Writes to an underlying writer with sampling.
+
+```go
+type SamplingWriter struct {
+    writer  io.Writer
+    sampler *Sampler
+    onDrop  func(dropped int) // Optional callback when messages dropped
+}
+```
+
+## Sampler Constructor
+
+### NewSampler
+
+Creates a new Sampler with threshold and interval.
+
+```go
+func NewSampler(threshold int, interval time.Duration) *Sampler
+```
+
+**Parameters:**
+- `threshold` - Maximum number of messages per interval
+- `interval` - Time window for counting
+
+**Returns:**
+- `*Sampler` - Configured sampler
+
+**Example:**
+```go
+import "time"
+
+// Allow 1000 messages per minute
+sampler := go_logs.NewSampler(1000, time.Minute)
+```
+
+**Location:** sampling.go:30
+
+## SamplingWriter Constructors
+
+### NewSamplingWriter
+
+Creates a writer with sampling.
+
+```go
+func NewSamplingWriter(writer io.Writer, threshold int, interval time.Duration) *SamplingWriter
+```
+
+**Parameters:**
+- `writer` - Underlying writer to wrap
+- `threshold` - Maximum messages per interval
+- `interval` - Time window for counting
+
+**Returns:**
+- `*SamplingWriter` - Rate-limited writer
+
+**Example:**
+```go
+import (
+    "github.com/drossan/go_logs"
+    "time"
+)
+
+file, _ := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+
+// Max 1000 logs per minute to prevent flooding
+sampled := go_logs.NewSamplingWriter(file, 1000, time.Minute)
+
+logger := go_logs.New(
+    go_logs.WithOutput(sampled),
+)
+```
+
+**Location:** sampling.go:119
+
+### NewSamplingWriterWithCallback
+
+Creates a writer with sampling and drop notification.
+
+```go
+func NewSamplingWriterWithCallback(writer io.Writer, threshold int, interval time.Duration, onDrop func(dropped int)) *SamplingWriter
+```
+
+**Parameters:**
+- `writer` - Underlying writer to wrap
+- `threshold` - Maximum messages per interval
+- `interval` - Time window for counting
+- `onDrop` - Function called when messages are dropped
+
+**Returns:**
+- `*SamplingWriter` - Rate-limited writer with callback
+
+**Example:**
+```go
+import (
+    "fmt"
+    "sync/atomic"
+    "time"
+)
+
+var droppedCount int64
+
+sampled := go_logs.NewSamplingWriterWithCallback(
+    file,
+    1000,
+    time.Minute,
+    func(dropped int) {
+        atomic.AddInt64(&droppedCount, int64(dropped))
+        fmt.Printf("Dropped %d logs\n", dropped)
+    },
+)
+
+logger := go_logs.New(go_logs.WithOutput(sampled))
+```
+
+**Location:** sampling.go:127
+
+## Sampler Methods
+
+### Allow
+
+Returns true if the message should be logged.
+
+```go
+func (s *Sampler) Allow() bool
+```
+
+**Returns:**
+- `bool` - true if within rate limit, false if should be dropped
+
+**Behavior:**
+- Resets counter if interval has passed
+- Increments counter if below threshold
+- Returns false if threshold exceeded
+
+**Location:** sampling.go:40
+
+### AllowN
+
+Allows N messages and returns how many were allowed.
+
+```go
+func (s *Sampler) AllowN(n int) int
+```
+
+**Parameters:**
+- `n` - Number of messages to allow
+
+**Returns:**
+- `int` - Number of messages allowed (0 to n)
+
+**Location:** sampling.go:62
+
+### GetCount
+
+Returns the current count in the interval.
+
+```go
+func (s *Sampler) GetCount() int
+```
+
+**Returns:**
+- `int` - Current message count
+
+**Location:** sampling.go:90
+
+### GetThreshold
+
+Returns the configured threshold.
+
+```go
+func (s *Sampler) GetThreshold() int
+```
+
+**Returns:**
+- `int` - Maximum messages per interval
+
+**Location:** sampling.go:97
+
+### Reset
+
+Resets the counter immediately.
+
+```go
+func (s *Sampler) Reset()
+```
+
+**Use cases:**
+- Manual reset for testing
+- Policy changes
+
+**Location:** sampling.go:104
+
+## SamplingWriter Methods
+
+### Write
+
+Implements io.Writer with sampling.
+
+```go
+func (sw *SamplingWriter) Write(p []byte) (n int, err error)
+```
+
+**Parameters:**
+- `p` - Bytes to write
+
+**Returns:**
+- `n` - Always len(p) (even if dropped)
+- `err` - Always nil (unless underlying writer fails)
+
+**Behavior:**
+- Checks sampler.Allow()
+- If allowed, writes to underlying writer
+- If not allowed, calls onDrop callback and returns success
+- Always returns len(p) to prevent logger errors
+
+**Location:** sampling.go:136
+
+### Close
+
+Closes the underlying writer if it implements io.Closer.
+
+```go
+func (sw *SamplingWriter) Close() error
+```
+
+**Returns:**
+- `error` - Error from underlying Close, or nil
+
+**Location:** sampling.go:150
+
+## Usage Examples
+
+### Basic Rate Limiting
+
+```go
+import (
+    "github.com/drossan/go_logs"
+    "time"
+)
+
+file, _ := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+
+// Limit to 1000 logs per minute
+sampled := go_logs.NewSamplingWriter(file, 1000, time.Minute)
+defer sampled.Close()
+
+logger := go_logs.New(
+    go_logs.WithOutput(sampled),
+)
+
+// First 1000 messages in a minute are written
+// Additional messages are dropped until next minute
+for i := 0; i < 2000; i++ {
+    logger.Info("Message", go_logs.Int("i", i))
+}
+// Only first 1000 are written to file
+```
+
+### With Drop Monitoring
+
+```go
+import (
+    "fmt"
+    "sync/atomic"
+)
+
+var totalDropped int64
+
+sampled := go_logs.NewSamplingWriterWithCallback(
+    file,
+    1000,
+    time.Minute,
+    func(dropped int) {
+        atomic.AddInt64(&totalDropped, int64(dropped))
+    },
+)
+
+logger := go_logs.New(go_logs.WithOutput(sampled))
+
+// Later: check dropped count
+fmt.Printf("Total logs dropped: %d\n", atomic.LoadInt64(&totalDropped))
+```
+
+### High-Volume Debug Logs
+
+```go
+import "time"
+
+// Allow 10,000 debug logs per second
+sampled := go_logs.NewSamplingWriter(file, 10000, time.Second)
+
+logger := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel),
+    go_logs.WithOutput(sampled),
+)
+
+// High-frequency debug logs won't overwhelm disk
+for i := 0; i < 1000000; i++ {
+    logger.Debug("Processing item", go_logs.Int("id", i))
+}
+```
+
+### Different Rates for Different Levels
+
+```go
+import "io"
+
+// Info logs: 1000/min
+infoSampled := go_logs.NewSamplingWriter(file, 1000, time.Minute)
+
+// Error logs: No sampling (always write)
+errorFile, _ := go_logs.NewRotatingFileWriter("errors.log", 50, 5)
+
+// Use hooks to route by level
+infoLogger := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithOutput(infoSampled),
+)
+
+errorHook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    if entry.Level >= go_logs.ErrorLevel {
+        formatter := go_logs.NewJSONFormatter()
+        data, _ := formatter.Format(entry)
+        errorFile.Write(data)
+    }
+    return nil
+})
+
+logger := go_logs.New(
+    go_logs.WithOutput(infoSampled),
+    go_logs.WithHooks(errorHook),
+)
+
+// Info logs are sampled, errors always written
+logger.Info("High volume info")  // Sampled
+logger.Error("Critical error")   // Always written
+```
+
+### Burst Protection
+
+```go
+import "time"
+
+// Allow bursts of 100 logs per second
+sampled := go_logs.NewSamplingWriter(file, 100, time.Second)
+
+logger := go_logs.New(go_logs.WithOutput(sampled))
+
+// Burst: only first 100 are written
+for i := 0; i < 1000; i++ {
+    logger.Warn("Burst warning", go_logs.Int("i", i))
+}
+// Logs 101-1000 are dropped
+
+// After 1 second, counter resets
+time.Sleep(time.Second)
+
+// Next 100 logs are written
+for i := 0; i < 100; i++ {
+    logger.Warn("Second burst", go_logs.Int("i", i))
+}
+```
+
+### Metrics Collection
+
+```go
+import (
+    "sync/atomic"
+    "time"
+)
+
+var (
+    totalLogs    int64
+    droppedLogs  int64
+)
+
+sampled := go_logs.NewSamplingWriterWithCallback(
+    file,
+    1000,
+    time.Minute,
+    func(dropped int) {
+        atomic.AddInt64(&droppedLogs, int64(dropped))
+    },
+)
+
+logger := go_logs.New(go_logs.WithOutput(sampled))
+
+// Increment total counter
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    atomic.AddInt64(&totalLogs, 1)
+    return nil
+})
+
+logger = go_logs.New(
+    go_logs.WithOutput(sampled),
+    go_logs.WithHooks(hook),
+)
+
+// Monitoring endpoint
+func getMetrics() map[string]int64 {
+    return map[string]int64{
+        "total":   atomic.LoadInt64(&totalLogs),
+        "dropped": atomic.LoadInt64(&droppedLogs),
+        "written": atomic.LoadInt64(&totalLogs) - atomic.LoadInt64(&droppedLogs),
+    }
+}
+```
+
+### Testing Sampling Behavior
+
+```go
+import (
+    "bytes"
+    "testing"
+    "time"
+)
+
+func TestSampling(t *testing.T) {
+    var buf bytes.Buffer
+    
+    // Allow 10 messages per second
+    sampled := go_logs.NewSamplingWriter(&buf, 10, time.Second)
+    
+    logger := go_logs.New(go_logs.WithOutput(sampled))
+    
+    // Write 20 messages
+    for i := 0; i < 20; i++ {
+        logger.Info("test")
+    }
+    
+    // Count actual messages
+    count := bytes.Count(buf.Bytes(), []byte("test"))
+    
+    if count != 10 {
+        t.Errorf("Expected 10 messages, got %d", count)
+    }
+}
+```
+
+## Best Practices
+
+<Tip>
+**Choose Appropriate Thresholds**
+
+Balance between data loss and resource protection:
+
+```go
+// Too restrictive: May lose important data
+sampled := go_logs.NewSamplingWriter(file, 10, time.Minute)
+
+// Too permissive: May not prevent flooding
+sampled := go_logs.NewSamplingWriter(file, 1000000, time.Minute)
+
+// Good: Based on actual capacity
+// Example: If disk can handle 1000 writes/sec, use 60000/min
+sampled := go_logs.NewSamplingWriter(file, 60000, time.Minute)
+```
+</Tip>
+
+<Tip>
+**Monitor Dropped Logs**
+
+Use callbacks to track sampling effectiveness:
+
+```go
+var dropped int64
+
+sampled := go_logs.NewSamplingWriterWithCallback(
+    file,
+    1000,
+    time.Minute,
+    func(n int) {
+        count := atomic.AddInt64(&dropped, int64(n))
+        if count > 10000 {
+            // Alert: Too many logs being dropped
+            alertOps("High log drop rate")
+        }
+    },
+)
+```
+</Tip>
+
+<Tip>
+**Level-Specific Sampling**
+
+Don't sample critical logs:
+
+```go
+// Sample info/debug, never sample errors
+infoWriter := go_logs.NewSamplingWriter(file, 1000, time.Minute)
+errorWriter := file // No sampling
+
+// Route by level using hooks or separate loggers
+```
+</Tip>
+
+<Warning>
+**Data Loss**
+
+Sampling WILL drop logs. Make sure this is acceptable:
+
+```go
+// Bad: Sampling audit logs (compliance requirement)
+auditSampled := go_logs.NewSamplingWriter(auditFile, 100, time.Minute)
+
+// Good: Sampling debug logs (nice-to-have)
+debugSampled := go_logs.NewSamplingWriter(debugFile, 1000, time.Minute)
+```
+</Warning>
+
+<Warning>
+**Interval Boundaries**
+
+Messages are counted per interval. All counters reset at interval boundary:
+
+```go
+sampled := go_logs.NewSamplingWriter(file, 1000, time.Minute)
+
+// At 10:00:59 - write 1000 messages (all allowed)
+// At 10:01:00 - counter resets
+// At 10:01:00 - write 1000 more messages (all allowed)
+
+// Total: 2000 messages in 1 second (but different intervals)
+```
+</Warning>
+
+## Performance
+
+SamplingWriter adds minimal overhead:
+
+**Sampler.Allow():**
+- Time check: ~20ns
+- Mutex lock: ~20ns
+- Counter increment: ~1ns
+- Total: ~41ns per call
+
+**Write overhead:**
+- Allowed: ~41ns + underlying writer time
+- Dropped: ~41ns (no write)
+
+## Thread Safety
+
+All methods are thread-safe:
+
+```go
+sampled := go_logs.NewSamplingWriter(file, 1000, time.Minute)
+
+// Safe from multiple goroutines
+go logger1.Info("Goroutine 1")
+go logger2.Info("Goroutine 2")
+
+// Safe concurrent counter access
+go sampled.sampler.GetCount()
+go sampled.sampler.Allow()
+```
+
+Uses `sync.Mutex` to protect counter state.
+
+## Related
+
+- [RotatingFileWriter](/api/writers/rotating-file) - File rotation writer
+- [MultiWriter](/api/writers/multi-writer) - Multiple destination writer
+- [Logger Options](/api/logger#options) - WithOutput option

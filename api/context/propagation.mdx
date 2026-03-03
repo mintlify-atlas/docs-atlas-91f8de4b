@@ -1,0 +1,172 @@
+---
+title: 'Context Propagation'
+description: 'Functions for storing metadata in Go contexts'
+icon: 'link'
+---
+
+## Overview
+
+Context propagation functions allow you to attach metadata (trace IDs, span IDs, request IDs, user IDs) to Go contexts. This metadata is automatically extracted and included in log entries when using context-aware logging functions.
+
+## Functions
+
+### WithTraceID
+
+Adds a trace ID to the context.
+
+```go
+func WithTraceID(ctx context.Context, traceID string) context.Context
+```
+
+**Parameters:**
+- `ctx` - The parent context
+- `traceID` - The trace ID to associate with this context
+
+**Returns:**
+- A new context with the trace ID stored
+
+**Description:**
+
+Trace IDs are used in distributed tracing to correlate log entries across multiple services. The trace ID should be the same for all log entries within a single request/transaction flow.
+
+**Example:**
+
+```go
+ctx := go_logs.WithTraceID(context.Background(), "abc-123-def-456")
+logger.LogCtx(ctx, go_logs.InfoLevel, "Request received")
+```
+
+---
+
+### WithSpanID
+
+Adds a span ID to the context.
+
+```go
+func WithSpanID(ctx context.Context, spanID string) context.Context
+```
+
+**Parameters:**
+- `ctx` - The parent context
+- `spanID` - The span ID to associate with this context
+
+**Returns:**
+- A new context with the span ID stored
+
+**Description:**
+
+Span IDs represent individual operations within a trace. A single trace can have multiple spans (e.g., HTTP request, database query, external API call).
+
+**Example:**
+
+```go
+ctx := go_logs.WithSpanID(context.Background(), "span-xyz")
+logger.LogCtx(ctx, go_logs.InfoLevel, "Database query executed")
+```
+
+---
+
+### WithRequestID
+
+Adds a request ID to the context.
+
+```go
+func WithRequestID(ctx context.Context, requestID string) context.Context
+```
+
+**Parameters:**
+- `ctx` - The parent context
+- `requestID` - The request ID to associate with this context
+
+**Returns:**
+- A new context with the request ID stored
+
+**Description:**
+
+Request IDs are used to track individual requests through a system. Unlike trace IDs (which are distributed), request IDs are typically scoped to a single service or application.
+
+**Example:**
+
+```go
+ctx := go_logs.WithRequestID(context.Background(), "req-123-456")
+logger.LogCtx(ctx, go_logs.InfoLevel, "Processing request")
+```
+
+---
+
+### WithUserID
+
+Adds a user ID to the context.
+
+```go
+func WithUserID(ctx context.Context, userID string) context.Context
+```
+
+**Parameters:**
+- `ctx` - The parent context
+- `userID` - The user ID to associate with this context
+
+**Returns:**
+- A new context with the user ID stored
+
+**Description:**
+
+User IDs are useful for associating log entries with specific users, which is valuable for auditing and user-specific debugging.
+
+**Example:**
+
+```go
+ctx := go_logs.WithUserID(context.Background(), "user-789")
+logger.LogCtx(ctx, go_logs.InfoLevel, "User action performed")
+```
+
+---
+
+## Chaining Context Functions
+
+You can chain multiple context functions to attach multiple pieces of metadata:
+
+```go
+ctx := context.Background()
+ctx = go_logs.WithTraceID(ctx, "trace-abc-123")
+ctx = go_logs.WithSpanID(ctx, "span-xyz-456")
+ctx = go_logs.WithRequestID(ctx, "req-789")
+ctx = go_logs.WithUserID(ctx, "user-001")
+
+logger.LogCtx(ctx, go_logs.InfoLevel, "Processing user request")
+// Log will include: trace_id, span_id, request_id, user_id
+```
+
+## Automatic Extraction
+
+When you use context-aware logging functions (`LogCtx`, `InfoLogCtx`, etc.), these context values are automatically extracted and included as structured fields in the log entry:
+
+```go
+ctx := go_logs.WithTraceID(context.Background(), "trace-123")
+logger.Info("message without context")  // No trace_id
+logger.LogCtx(ctx, go_logs.InfoLevel, "message with context")  // Includes trace_id
+```
+
+## Implementation Details
+
+Context keys are implemented using an unexported `contextKey` type to prevent collisions with other packages:
+
+```go
+// Source: context.go:7-22
+type contextKey struct {
+    name string
+}
+
+var (
+    traceIDKey   = contextKey{name: "trace_id"}
+    spanIDKey    = contextKey{name: "span_id"}
+    requestIDKey = contextKey{name: "request_id"}
+    userIDKey    = contextKey{name: "user_id"}
+)
+```
+
+This ensures that other packages cannot create conflicting context keys.
+
+## Related Functions
+
+See [Context Helpers](/api/context/helpers) for functions that extract values from contexts.

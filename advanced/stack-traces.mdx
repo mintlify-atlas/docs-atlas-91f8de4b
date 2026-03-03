@@ -1,0 +1,508 @@
+---
+title: 'Stack Trace Capture'
+description: 'Automatically capture full stack traces for errors and fatal logs'
+---
+
+## Overview
+
+Stack trace capture provides complete call stack information for debugging critical errors. Unlike [caller info](/advanced/caller-info) which shows a single file:line, stack traces show the **entire call chain** leading to the log statement.
+
+Implementation: `~/workspace/source/caller.go:68-86`
+
+## Quick Start
+
+### Enable Stack Traces for Errors
+
+From `~/workspace/source/options.go:157`:
+
+```go
+import "github.com/drossan/go_logs"
+
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),  // Default
+)
+
+logger.Info("processing request")     // No stack trace
+logger.Error("database query failed") // Includes full stack trace
+```
+
+Output includes:
+```
+ERROR database query failed
+Stack trace:
+goroutine 1 [running]:
+main.queryDatabase()
+    /app/database.go:45
+main.handleRequest()
+    /app/handler.go:120
+main.main()
+    /app/main.go:20
+```
+
+### Enable for All Levels
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.TraceLevel),  // Capture for ALL levels
+)
+
+logger.Debug("debugging issue")  // Includes stack trace
+```
+
+## Stack Trace Functions
+
+From `~/workspace/source/caller.go:68-86`:
+
+### GetStackTrace - Current Goroutine
+
+```go
+func GetStackTrace(skip int) []byte {
+    // Allocate buffer for stack trace (4KB should be enough for most cases)
+    buf := make([]byte, 4096)
+    n := runtime.Stack(buf, false)
+    if n == 0 {
+        return nil
+    }
+    return buf[:n]
+}
+```
+
+Captures stack trace of **current goroutine only** (up to 4KB).
+
+### GetStackTraceAll - All Goroutines
+
+```go
+func GetStackTraceAll() []byte {
+    buf := make([]byte, 65536) // 64KB for all goroutines
+    n := runtime.Stack(buf, true)
+    if n == 0 {
+        return nil
+    }
+    return buf[:n]
+}
+```
+
+Captures stack traces of **all goroutines** (up to 64KB).
+
+## Configuration Options
+
+### WithStackTrace
+
+From `~/workspace/source/options.go:149-159`:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),  // Enable stack trace capture
+)
+```
+
+Enables automatic stack trace capture for logs meeting the `stackTraceLevel` threshold.
+
+### WithStackTraceLevel
+
+From `~/workspace/source/options.go:167-176`:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.WarnLevel),  // Capture for Warn, Error, Fatal
+)
+
+logger.Info("request started")   // No stack
+logger.Warn("slow query")        // Stack trace captured
+logger.Error("query failed")     // Stack trace captured
+```
+
+Default: `ErrorLevel` (stack traces for Error and Fatal only).
+
+Common values:
+- `go_logs.WarnLevel` - Capture for Warn, Error, Fatal
+- `go_logs.ErrorLevel` - Capture for Error, Fatal (default, recommended)
+- `go_logs.FatalLevel` - Capture only for Fatal
+
+## Entry Structure
+
+From `~/workspace/source/entry.go:28-30`:
+
+```go
+type Entry struct {
+    Level      Level
+    Message    string
+    Fields     []Field
+    Timestamp  time.Time
+    Caller     *CallerInfo  // Single source location
+    StackTrace []byte       // Full stack trace (optional)
+}
+```
+
+Stack trace is stored as raw bytes from `runtime.Stack()`.
+
+## When Stack Traces are Captured
+
+From `~/workspace/source/logger_impl.go:182-184`:
+
+```go
+// Capture stack trace if enabled and level meets threshold
+if l.enableStackTrace && level >= l.stackTraceLevel {
+    entry.StackTrace = GetStackTrace(l.callerSkip)
+}
+```
+
+Stack traces are captured when:
+1. `WithStackTrace(true)` is set, **AND**
+2. Log level ≥ `stackTraceLevel`
+
+## Accessing Stack Traces
+
+### In Hooks
+
+```go
+type DebugHook struct{}
+
+func (h *DebugHook) Run(entry *go_logs.Entry) error {
+    if entry.StackTrace != nil {
+        fmt.Printf("Stack trace:\n%s\n", string(entry.StackTrace))
+    }
+    return nil
+}
+```
+
+### In Formatters
+
+```go
+func (f *CustomFormatter) Format(entry *go_logs.Entry) ([]byte, error) {
+    var builder strings.Builder
+
+    // ... format level, message, fields ...
+
+    // Append stack trace if available
+    if entry.StackTrace != nil {
+        builder.WriteString("\nStack trace:\n")
+        builder.Write(entry.StackTrace)
+    }
+
+    return []byte(builder.String()), nil
+}
+```
+
+### In Error Handling
+
+```go
+func handleError(err error) {
+    logger.Error("operation failed",
+        go_logs.Err(err),
+    )
+    // Stack trace automatically captured and logged
+}
+```
+
+## Stack Trace Format
+
+Output from `runtime.Stack()` (from Go standard library):
+
+```
+goroutine 1 [running]:
+main.failingFunction()
+    /home/user/project/main.go:45 +0x123
+main.processRequest(...)
+    /home/user/project/handler.go:120
+main.main()
+    /home/user/project/main.go:20 +0x456
+```
+
+Includes:
+- Goroutine ID and state
+- Function names in call order
+- File paths and line numbers
+- Program counter offsets
+
+## Examples
+
+### Capture Stack for Errors Only (Default)
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),  // Default
+)
+
+func processOrder(orderID string) {
+    logger.Info("processing order", go_logs.String("order_id", orderID))
+    // No stack trace
+
+    if err := validateOrder(orderID); err != nil {
+        logger.Error("order validation failed",
+            go_logs.String("order_id", orderID),
+            go_logs.Err(err),
+        )
+        // Stack trace captured showing: processOrder -> validateOrder
+    }
+}
+```
+
+### Capture Stack for Warnings and Above
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.WarnLevel),
+)
+
+logger.Debug("cache miss")           // No stack
+logger.Info("request processed")     // No stack
+logger.Warn("slow database query")   // Stack captured
+logger.Error("connection failed")    // Stack captured
+```
+
+### Disable Stack Traces
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(false),  // Disabled
+)
+
+logger.Error("error without stack trace")
+```
+
+### Send Stack Traces to Monitoring
+
+```go
+type MonitoringHook struct {
+    client *monitoring.Client
+}
+
+func (h *MonitoringHook) Run(entry *go_logs.Entry) error {
+    if entry.Level >= go_logs.ErrorLevel && entry.StackTrace != nil {
+        h.client.ReportError(
+            entry.Message,
+            string(entry.StackTrace),
+            entry.Fields,
+        )
+    }
+    return nil
+}
+
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithHooks(NewMonitoringHook()),
+)
+```
+
+### Development vs Production
+
+```go
+func NewLogger() (go_logs.Logger, error) {
+    opts := []go_logs.Option{
+        go_logs.WithLevel(go_logs.InfoLevel),
+    }
+
+    if os.Getenv("ENV") == "development" {
+        // Dev: Capture stack for warnings and above
+        opts = append(opts,
+            go_logs.WithStackTrace(true),
+            go_logs.WithStackTraceLevel(go_logs.WarnLevel),
+        )
+    } else {
+        // Prod: Capture stack for errors only
+        opts = append(opts,
+            go_logs.WithStackTrace(true),
+            go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+        )
+    }
+
+    return go_logs.New(opts...)
+}
+```
+
+## Performance Impact
+
+### Stack Trace Overhead
+
+- **~500ns - 2µs per capture** (depends on stack depth)
+- Uses `runtime.Stack()` which is relatively expensive
+- Only affects logs at or above `stackTraceLevel`
+
+Benchmark (approximate):
+```
+Without Stack Trace: 220 ns/op
+With Stack Trace:    2200 ns/op  (+900%)
+```
+
+### Memory Allocation
+
+From `~/workspace/source/caller.go:70`:
+
+- **4KB buffer per stack trace** (current goroutine)
+- **64KB buffer for all goroutines**
+- Buffers are allocated on each capture
+
+### Recommendations
+
+1. **Use `ErrorLevel` threshold** (default) in production
+2. **Avoid capturing for Info/Debug** in high-throughput systems
+3. **Consider async logging** if capturing many stack traces
+
+## Best Practices
+
+### Production Configuration
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),  // Errors and Fatal only
+)
+```
+
+Benefits:
+- Low overhead for normal operations
+- Complete debugging info for actual errors
+- Balanced performance/observability
+
+### Development Configuration
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel),
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.WarnLevel),  // More verbose
+    go_logs.WithCaller(true),  // Also enable caller info
+)
+```
+
+Benefits:
+- Maximum debugging information
+- Easier issue reproduction
+- Performance is less critical in dev
+
+### Combine with Caller Info
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),                        // All levels: file:line
+    go_logs.WithStackTrace(true),                    // Errors: full stack
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+)
+
+logger.Info("request started")   // Caller: main.go:42
+logger.Error("query failed")     // Caller + full stack trace
+```
+
+### Filter in Formatters
+
+Avoid outputting stack traces to console in production:
+
+```go
+type ProductionFormatter struct{}
+
+func (f *ProductionFormatter) Format(entry *go_logs.Entry) ([]byte, error) {
+    // JSON format without stack trace
+    data := map[string]interface{}{
+        "time":    entry.Timestamp,
+        "level":   entry.Level.String(),
+        "message": entry.Message,
+        "fields":  entry.Fields,
+    }
+
+    // Stack trace available to hooks but not in console output
+    // (Hooks can send to monitoring systems)
+
+    return json.Marshal(data)
+}
+```
+
+## Troubleshooting
+
+### Stack Trace is nil
+
+**Problem**: `entry.StackTrace` is `nil` even for errors.
+
+**Solution**: Ensure stack traces are enabled:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),  // Must be enabled
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+)
+```
+
+And check log level meets threshold.
+
+### Stack Trace Truncated
+
+**Problem**: Stack trace is cut off at 4KB.
+
+**Solution**: This is a limitation of the current implementation. For very deep stacks, consider:
+
+1. Simplifying call chains
+2. Using `GetStackTraceAll()` for debugging
+3. Increasing buffer size (requires source modification)
+
+### Performance Degradation
+
+**Problem**: Logging is slow with stack traces enabled.
+
+**Solution**: Increase `stackTraceLevel` threshold:
+
+```go
+// Before: Stack for all warnings
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.WarnLevel),
+)
+
+// After: Stack for errors only
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+)
+```
+
+Or disable entirely if not needed:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(false),
+)
+```
+
+## Comparison: Caller Info vs Stack Traces
+
+| Feature | Caller Info | Stack Traces |
+|---------|-------------|-------------|
+| **What** | Single source location | Full call chain |
+| **Output** | `main.go:42` | Multi-line stack dump |
+| **Overhead** | ~100-200ns | ~500ns-2µs |
+| **Use Case** | General debugging | Critical error analysis |
+| **Memory** | Negligible | 4KB-64KB per capture |
+| **Default** | Disabled | Disabled |
+| **Enable** | `WithCaller(true)` | `WithStackTrace(true)` |
+
+### When to Use
+
+**Use Caller Info when**:
+- You need to know where logs originate
+- Performance is critical
+- Simple file:line is sufficient
+
+**Use Stack Traces when**:
+- Debugging complex call chains
+- Analyzing error propagation
+- Sending to error tracking systems (Sentry, Rollbar)
+
+**Use Both when**:
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),                        // Always show source
+    go_logs.WithStackTrace(true),                    // Stack for errors
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+)
+```
+
+## See Also
+
+- [Caller Info](/advanced/caller-info) - Capture single source location
+- [Hooks](/advanced/hooks) - Process stack traces in hooks
+- [Error Handling](/guides/error-handling) - Best practices for logging errors

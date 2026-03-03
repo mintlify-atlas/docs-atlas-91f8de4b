@@ -1,0 +1,507 @@
+---
+title: Environment Variables
+description: Configure go_logs using environment variables for deployment flexibility
+---
+
+## Overview
+
+go_logs supports configuration via environment variables, making it easy to adjust logging behavior across different environments without code changes.
+
+Environment variables are automatically loaded when using the v2 legacy API or can be manually loaded for v3 loggers.
+
+## Log Level
+
+### LOG_LEVEL
+
+Sets the minimum log level threshold. Only messages at or above this level will be logged.
+
+**Type:** String (case-insensitive)
+
+**Valid Values:**
+- `trace` - Extremely detailed, high-volume logging (Level 10)
+- `debug` - Detailed diagnostic information (Level 20)
+- `info` - General informational messages (Level 30, **default**)
+- `warn` or `warning` - Warning messages (Level 40)
+- `error` - Error events (Level 50)
+- `fatal` - Critical errors that terminate the app (Level 60)
+- `silent`, `none`, or `disable` - Disable all logging (Level 0)
+
+**Default:** If not set, the legacy notification system is used (v2 backward compatibility)
+
+**Example:**
+```bash
+export LOG_LEVEL=info
+```
+
+**Usage:**
+```go
+// v2 API (automatic)
+go_logs.Init()
+go_logs.InfoLog("This will be logged")
+go_logs.DebugLog("This will be filtered out")
+
+// v3 API (via config)
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.ParseLevel(os.Getenv("LOG_LEVEL"))),
+)
+```
+
+## Output Format
+
+### LOG_FORMAT
+
+Sets the output format for log entries.
+
+**Type:** String (case-insensitive)
+
+**Valid Values:**
+- `text` - Human-readable text with colors (**default**)
+- `json` - Structured JSON for log aggregation
+
+**Default:** `text`
+
+**Example:**
+```bash
+# Development
+export LOG_FORMAT=text
+
+# Production
+export LOG_FORMAT=json
+```
+
+**Output Examples:**
+
+Text format:
+```
+[2026/03/03 15:30:00] INFO connection established host=db.example.com port=5432
+```
+
+JSON format:
+```json
+{"timestamp":"2026-03-03T15:30:00Z","level":"INFO","message":"connection established","fields":{"host":"db.example.com","port":5432}}
+```
+
+## File Logging
+
+### SAVE_LOG_FILE
+
+Enables or disables logging to a file.
+
+**Type:** Boolean (`0` or `1`)
+
+**Default:** `0` (disabled)
+
+**Example:**
+```bash
+export SAVE_LOG_FILE=1
+```
+
+### LOG_FILE_NAME
+
+Sets the name of the log file.
+
+**Type:** String
+
+**Default:** `log.txt`
+
+**Example:**
+```bash
+export LOG_FILE_NAME=app.log
+```
+
+### LOG_FILE_PATH
+
+Sets the directory path for log files.
+
+**Type:** String (directory path)
+
+**Default:** Current directory (`.`)
+
+**Example:**
+```bash
+export LOG_FILE_PATH=/var/log/myapp
+```
+
+**Complete File Logging Example:**
+```bash
+export SAVE_LOG_FILE=1
+export LOG_FILE_NAME=application.log
+export LOG_FILE_PATH=/var/log
+# Creates /var/log/application.log
+```
+
+## File Rotation (v3)
+
+### LOG_MAX_SIZE
+
+Maximum log file size in megabytes before rotation occurs.
+
+**Type:** Integer (MB)
+
+**Default:** `100` MB
+
+**Example:**
+```bash
+export LOG_MAX_SIZE=50  # Rotate at 50 MB
+```
+
+### LOG_MAX_BACKUPS
+
+Maximum number of backup files to keep after rotation.
+
+**Type:** Integer
+
+**Default:** `5`
+
+**Example:**
+```bash
+export LOG_MAX_BACKUPS=10  # Keep last 10 rotated files
+```
+
+**Rotation Example:**
+```bash
+export LOG_MAX_SIZE=100
+export LOG_MAX_BACKUPS=5
+
+# Creates:
+# app.log       (current)
+# app.log.1     (most recent backup)
+# app.log.2
+# app.log.3
+# app.log.4
+# app.log.5     (oldest backup, deleted on next rotation)
+```
+
+**Usage in Code:**
+```go
+// Load from environment
+maxSizeMB, _ := strconv.Atoi(os.Getenv("LOG_MAX_SIZE"))
+maxBackups, _ := strconv.Atoi(os.Getenv("LOG_MAX_BACKUPS"))
+
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFile(
+        os.Getenv("LOG_FILE_PATH")+"/"+os.Getenv("LOG_FILE_NAME"),
+        maxSizeMB,
+        maxBackups,
+    ),
+)
+```
+
+## Slack Notifications
+
+### SLACK_TOKEN
+
+Slack bot token for sending notifications.
+
+**Type:** String (OAuth token)
+
+**Format:** `xoxb-...`
+
+**Example:**
+```bash
+export SLACK_TOKEN=xoxb-123456789-abcdefghijk
+```
+
+### SLACK_CHANNEL_ID
+
+Slack channel ID where notifications will be sent.
+
+**Type:** String (Channel ID)
+
+**Format:** `C...` or `G...`
+
+**Example:**
+```bash
+export SLACK_CHANNEL_ID=C0123456789
+```
+
+### NOTIFICATIONS_SLACK_ENABLED
+
+Enables or disables Slack notifications.
+
+**Type:** Boolean (`0` or `1`)
+
+**Default:** `0` (disabled)
+
+**Example:**
+```bash
+export NOTIFICATIONS_SLACK_ENABLED=1
+export SLACK_TOKEN=xoxb-your-token
+export SLACK_CHANNEL_ID=C0123456789
+```
+
+## Legacy Notification Levels (v2)
+
+These variables control which log levels trigger Slack notifications in the v2 API. If any are set, they take precedence over `LOG_LEVEL` for backward compatibility.
+
+### NOTIFICATION_FATAL_LOG
+
+Send fatal logs to Slack.
+
+**Type:** Boolean (`0` or `1`)
+
+**Default:** `0`
+
+**Example:**
+```bash
+export NOTIFICATION_FATAL_LOG=1
+```
+
+### NOTIFICATION_ERROR_LOG
+
+Send error logs to Slack.
+
+**Type:** Boolean (`0` or `1`)
+
+**Default:** `0`
+
+**Example:**
+```bash
+export NOTIFICATION_ERROR_LOG=1
+```
+
+### NOTIFICATION_WARNING_LOG
+
+Send warning logs to Slack.
+
+**Type:** Boolean (`0` or `1`)
+
+**Default:** `0`
+
+**Example:**
+```bash
+export NOTIFICATION_WARNING_LOG=1
+```
+
+### NOTIFICATION_INFO_LOG
+
+Send info logs to Slack.
+
+**Type:** Boolean (`0` or `1`)
+
+**Default:** `0`
+
+**Example:**
+```bash
+export NOTIFICATION_INFO_LOG=1
+```
+
+### NOTIFICATION_SUCCESS_LOG
+
+Send success logs to Slack.
+
+**Type:** Boolean (`0` or `1`)
+
+**Default:** `0`
+
+**Example:**
+```bash
+export NOTIFICATION_SUCCESS_LOG=1
+```
+
+## Configuration Priority
+
+go_logs uses the following priority for configuration (highest to lowest):
+
+1. **Programmatic configuration** (v3 `New()` options)
+2. **Legacy notification variables** (`NOTIFICATION_*_LOG`)
+3. **LOG_LEVEL** environment variable
+4. **Default values** (InfoLevel, text format, etc.)
+
+**Example:**
+```bash
+# If both are set, NOTIFICATION_ERROR_LOG takes precedence
+export LOG_LEVEL=info
+export NOTIFICATION_ERROR_LOG=1
+```
+
+## Environment Configuration Examples
+
+### Development Environment
+
+```bash
+# .env.development
+LOG_LEVEL=debug
+LOG_FORMAT=text
+SAVE_LOG_FILE=0  # Console only
+```
+
+### Staging Environment
+
+```bash
+# .env.staging
+LOG_LEVEL=info
+LOG_FORMAT=json
+SAVE_LOG_FILE=1
+LOG_FILE_NAME=staging.log
+LOG_FILE_PATH=/var/log/myapp
+LOG_MAX_SIZE=100
+LOG_MAX_BACKUPS=5
+
+# Slack notifications for errors
+NOTIFICATIONS_SLACK_ENABLED=1
+SLACK_TOKEN=xoxb-staging-token
+SLACK_CHANNEL_ID=C_STAGING
+```
+
+### Production Environment
+
+```bash
+# .env.production
+LOG_LEVEL=warn  # Only warnings and errors
+LOG_FORMAT=json
+SAVE_LOG_FILE=1
+LOG_FILE_NAME=production.log
+LOG_FILE_PATH=/var/log/myapp
+LOG_MAX_SIZE=200  # Larger files
+LOG_MAX_BACKUPS=10  # Keep more backups
+
+# Slack notifications for errors and fatal
+NOTIFICATIONS_SLACK_ENABLED=1
+SLACK_TOKEN=xoxb-production-token
+SLACK_CHANNEL_ID=C_ALERTS
+NOTIFICATION_FATAL_LOG=1
+NOTIFICATION_ERROR_LOG=1
+```
+
+## Docker Configuration
+
+```dockerfile
+# Dockerfile
+FROM golang:1.21
+
+# Set default log configuration
+ENV LOG_LEVEL=info \
+    LOG_FORMAT=json \
+    SAVE_LOG_FILE=0
+
+COPY . /app
+WORKDIR /app
+
+RUN go build -o myapp
+
+CMD ["./myapp"]
+```
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  app:
+    build: .
+    environment:
+      - LOG_LEVEL=debug
+      - LOG_FORMAT=text
+      - SAVE_LOG_FILE=1
+      - LOG_FILE_PATH=/var/log
+      - SLACK_TOKEN=${SLACK_TOKEN}
+      - SLACK_CHANNEL_ID=${SLACK_CHANNEL_ID}
+    volumes:
+      - ./logs:/var/log
+```
+
+## Kubernetes Configuration
+
+```yaml
+# deployment.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-logging-config
+data:
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+  LOG_MAX_SIZE: "100"
+  LOG_MAX_BACKUPS: "5"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  template:
+    spec:
+      containers:
+      - name: app
+        image: myapp:latest
+        envFrom:
+        - configMapRef:
+            name: app-logging-config
+        env:
+        - name: SLACK_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: slack-credentials
+              key: token
+        - name: SLACK_CHANNEL_ID
+          valueFrom:
+            secretKeyRef:
+              name: slack-credentials
+              key: channel
+```
+
+## Loading Environment Variables
+
+### v2 API (Automatic)
+
+The v2 API automatically loads environment variables when `Init()` is called:
+
+```go
+import "github.com/drossan/go_logs"
+
+func main() {
+    go_logs.Init()  // Loads all environment variables
+    defer go_logs.Close()
+    
+    go_logs.InfoLog("Application started")
+}
+```
+
+### v3 API (Manual)
+
+The v3 API requires explicit configuration, but you can load from environment:
+
+```go
+import (
+    "os"
+    "strconv"
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Parse environment variables
+    level := go_logs.ParseLevel(os.Getenv("LOG_LEVEL"))
+    
+    maxSize, _ := strconv.Atoi(os.Getenv("LOG_MAX_SIZE"))
+    if maxSize == 0 {
+        maxSize = 100 // default
+    }
+    
+    maxBackups, _ := strconv.Atoi(os.Getenv("LOG_MAX_BACKUPS"))
+    if maxBackups == 0 {
+        maxBackups = 5 // default
+    }
+    
+    // Create logger from environment
+    logger, err := go_logs.New(
+        go_logs.WithLevel(level),
+        go_logs.WithRotatingFile(
+            os.Getenv("LOG_FILE_PATH")+"/"+os.Getenv("LOG_FILE_NAME"),
+            maxSize,
+            maxBackups,
+        ),
+    )
+    if err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+    
+    logger.Info("Application started")
+}
+```
+
+## Next Steps
+
+- [Configuration Options](/configuration/options) - Programmatic configuration
+- [Output Destinations](/configuration/output-destinations) - File rotation and multiple outputs
+- [Quick Start](/getting-started/quick-start) - Basic usage examples

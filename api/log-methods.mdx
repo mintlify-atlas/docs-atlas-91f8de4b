@@ -1,0 +1,629 @@
+---
+title: "Logging Methods"
+description: "Detailed documentation for all Logger logging methods"
+---
+
+## Overview
+
+The Logger interface provides convenience methods for each log level, plus core methods for flexible logging. All methods are thread-safe and perform fast-path filtering.
+
+## Core Logging Methods
+
+### Log
+
+The fundamental logging method that all other methods are built upon.
+
+```go
+func (l Logger) Log(level Level, msg string, fields ...Field)
+```
+
+<ParamField path="level" type="Level" required>
+  The severity level: TraceLevel (10), DebugLevel (20), InfoLevel (30), WarnLevel (40), ErrorLevel (50), FatalLevel (60)
+</ParamField>
+
+<ParamField path="msg" type="string" required>
+  The log message (can be empty string)
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Structured key-value pairs using String(), Int(), Err(), etc.
+</ParamField>
+
+**Performance:** Fast-path filtering checks level BEFORE any allocations or processing. Filtered messages cost < 1 ns.
+
+**Example:**
+
+```go
+logger.Log(go_logs.InfoLevel, "User logged in",
+    go_logs.String("username", "john"),
+    go_logs.String("ip", "192.168.1.1"),
+)
+```
+
+**Test Example (from logger_test.go:52):**
+
+```go
+buf := &bytes.Buffer{}
+logger, _ := go_logs.New(go_logs.WithOutput(buf))
+
+logger.Log(go_logs.InfoLevel, "test message", go_logs.String("key", "value"))
+
+output := buf.String()
+// Output contains: "test message" and "key=value"
+```
+
+### LogCtx
+
+Logs a message with context support for distributed tracing.
+
+```go
+func (l Logger) LogCtx(ctx context.Context, level Level, msg string, fields ...Field)
+```
+
+<ParamField path="ctx" type="context.Context" required>
+  Context containing tracing information (trace_id, span_id, request_id, user_id)
+</ParamField>
+
+<ParamField path="level" type="Level" required>
+  The severity level
+</ParamField>
+
+<ParamField path="msg" type="string" required>
+  The log message
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Additional structured fields
+</ParamField>
+
+**Behavior:** Automatically extracts fields from context and includes them in the log entry.
+
+**Example:**
+
+```go
+ctx := go_logs.WithTraceID(context.Background(), "trace-789")
+ctx = go_logs.WithSpanID(ctx, "span-456")
+
+logger.LogCtx(ctx, go_logs.InfoLevel, "Processing request",
+    go_logs.String("endpoint", "/api/users"),
+)
+// Output includes: trace_id=trace-789 span_id=span-456 endpoint=/api/users
+```
+
+**Test Example (from logger_test.go:226):**
+
+```go
+buf := &bytes.Buffer{}
+logger, _ := go_logs.New(
+    go_logs.WithOutput(buf),
+    go_logs.WithLevel(go_logs.InfoLevel),
+)
+
+ctx := context.Background()
+logger.LogCtx(ctx, go_logs.InfoLevel, "context message", go_logs.String("key", "value"))
+
+output := buf.String()
+// Contains: "context message" and "key=value"
+```
+
+## Level-Specific Methods
+
+These convenience methods provide a simpler API for common log levels. Each method internally calls `Log()` with the appropriate level.
+
+### Trace
+
+Logs at TraceLevel (10) for extremely detailed debugging.
+
+```go
+func (l Logger) Trace(msg string, fields ...Field)
+```
+
+<ParamField path="msg" type="string" required>
+  The log message
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Structured fields
+</ParamField>
+
+**Use Case:** Function entry/exit, loop iterations, extremely verbose debugging.
+
+**Example:**
+
+```go
+logger.Trace("Function called",
+    go_logs.String("function", "processData"),
+    go_logs.String("params", "user=123"),
+)
+```
+
+**Test Example (from logger_test.go:76):**
+
+```go
+buf := &bytes.Buffer{}
+logger, _ := go_logs.New(
+    go_logs.WithOutput(buf),
+    go_logs.WithLevel(go_logs.TraceLevel),
+)
+
+logger.Trace("test message")
+output := buf.String()
+// Contains: "TRACE"
+```
+
+### Debug
+
+Logs at DebugLevel (20) for diagnostic information.
+
+```go
+func (l Logger) Debug(msg string, fields ...Field)
+```
+
+<ParamField path="msg" type="string" required>
+  The log message
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Structured fields
+</ParamField>
+
+**Use Case:** Detailed application flow, variable values, debugging.
+
+**Example:**
+
+```go
+logger.Debug("Processing request",
+    go_logs.String("endpoint", "/api/users"),
+    go_logs.String("method", "GET"),
+    go_logs.Int("user_id", 123),
+)
+```
+
+**Test Example (from logger_test.go:77):**
+
+```go
+logger.Debug("test message")
+output := buf.String()
+// Contains: "DEBUG"
+```
+
+### Info
+
+Logs at InfoLevel (30) for general informational messages.
+
+```go
+func (l Logger) Info(msg string, fields ...Field)
+```
+
+<ParamField path="msg" type="string" required>
+  The log message
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Structured fields
+</ParamField>
+
+**Use Case:** Normal application events, startup/shutdown, major milestones.
+
+**Example:**
+
+```go
+logger.Info("Server started",
+    go_logs.Int("port", 8080),
+    go_logs.String("version", "1.0.0"),
+)
+```
+
+**Test Example (from logger_test.go:78):**
+
+```go
+logger.Info("test message")
+output := buf.String()
+// Contains: "INFO"
+```
+
+**Structured Fields Example (from logger_test.go:244):**
+
+```go
+err := errors.New("test error")
+
+logger.Info("structured message",
+    go_logs.String("str", "value"),
+    go_logs.Int("int", 42),
+    go_logs.Int64("int64", int64(1234567890)),
+    go_logs.Float64("float", 3.14),
+    go_logs.Bool("bool", true),
+    go_logs.Err(err),
+)
+
+output := buf.String()
+// Contains: str=value int=42 int64=1234567890 float=3.14 bool=true error=test error
+```
+
+### Warn
+
+Logs at WarnLevel (40) for potentially harmful situations.
+
+```go
+func (l Logger) Warn(msg string, fields ...Field)
+```
+
+<ParamField path="msg" type="string" required>
+  The log message
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Structured fields
+</ParamField>
+
+**Use Case:** Deprecated features, unexpected but handled conditions, high resource usage.
+
+**Example:**
+
+```go
+logger.Warn("High memory usage",
+    go_logs.Float64("usage_percent", 85.5),
+    go_logs.Float64("threshold_percent", 80.0),
+)
+```
+
+**Test Example (from logger_test.go:79):**
+
+```go
+logger.Warn("test message")
+output := buf.String()
+// Contains: "WARN"
+```
+
+### Error
+
+Logs at ErrorLevel (50) for error events.
+
+```go
+func (l Logger) Error(msg string, fields ...Field)
+```
+
+<ParamField path="msg" type="string" required>
+  The log message
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Structured fields (commonly includes Err(error))
+</ParamField>
+
+**Use Case:** Recoverable errors, failed operations that don't crash the app.
+
+**Behavior:** 
+- By default, automatically captures caller information (file:line function)
+- Can capture stack traces if configured with `WithStackTrace(true)`
+- Does NOT terminate the application (use Fatal for that)
+
+**Example:**
+
+```go
+logger.Error("Database connection failed",
+    go_logs.Err(err),
+    go_logs.String("host", "localhost"),
+    go_logs.Int("port", 5432),
+    go_logs.Int("retry_count", 3),
+)
+```
+
+**Test Example (from logger_test.go:80):**
+
+```go
+logger.Error("test message")
+output := buf.String()
+// Contains: "ERROR"
+```
+
+### Fatal
+
+Logs at FatalLevel (60) and terminates the application.
+
+```go
+func (l Logger) Fatal(msg string, fields ...Field)
+```
+
+<ParamField path="msg" type="string" required>
+  The log message
+</ParamField>
+
+<ParamField path="fields" type="...Field">
+  Structured fields
+</ParamField>
+
+**Behavior:**
+1. Logs the message with FatalLevel
+2. Calls `os.Exit(1)` to terminate the application
+3. Deferred functions in the current goroutine are NOT executed
+
+**Use Case:** Unrecoverable errors that require immediate termination (config load failure, critical resource unavailable).
+
+<Warning>
+  Fatal() calls `os.Exit(1)` after logging, terminating the program immediately. Use Error() if you want to continue execution.
+</Warning>
+
+**Example:**
+
+```go
+config, err := loadConfig("app.yaml")
+if err != nil {
+    logger.Fatal("Cannot load configuration",
+        go_logs.Err(err),
+        go_logs.String("config_file", "app.yaml"),
+    )
+    // Program terminates here - this line never executes
+}
+```
+
+**Source (from logger_impl.go:247):**
+
+```go
+func (l *LoggerImpl) Fatal(msg string, fields ...Field) {
+    l.Log(FatalLevel, msg, fields...)
+    // Terminate application after fatal log
+    os.Exit(1)
+}
+```
+
+## Level Filtering Behavior
+
+All logging methods check the current log level threshold before processing:
+
+**Example (from logger_test.go:96):**
+
+```go
+buf := &bytes.Buffer{}
+logger, _ := go_logs.New(
+    go_logs.WithOutput(buf),
+    go_logs.WithLevel(go_logs.WarnLevel), // Only Warn and above
+)
+
+// These are filtered out (no output)
+logger.Debug("debug message")
+logger.Info("info message")
+
+// These are logged
+logger.Warn("warn message")
+logger.Error("error message")
+
+output := buf.String()
+// Does NOT contain: "debug message" or "info message"
+// Contains: "warn message" and "error message"
+```
+
+## Structured Fields
+
+All logging methods accept structured fields:
+
+### Field Types
+
+```go
+go_logs.String("key", "value")           // String field
+go_logs.Int("count", 42)                  // Integer field
+go_logs.Int64("id", 1234567890)           // Int64 field
+go_logs.Float64("rate", 3.14)             // Float field
+go_logs.Bool("enabled", true)             // Boolean field
+go_logs.Err(err)                          // Error field (key="error")
+go_logs.Any("data", complexStruct)        // Any type (uses fmt.Sprintf)
+```
+
+### Field Examples
+
+**Multiple Fields:**
+
+```go
+logger.Info("User login",
+    go_logs.String("username", "john"),
+    go_logs.String("ip", "192.168.1.1"),
+    go_logs.Int("login_count", 5),
+    go_logs.Bool("first_time", false),
+)
+```
+
+**Error Fields:**
+
+```go
+if err != nil {
+    logger.Error("Operation failed",
+        go_logs.Err(err),
+        go_logs.String("operation", "database_query"),
+        go_logs.String("query", "SELECT * FROM users"),
+    )
+}
+```
+
+## Performance Characteristics
+
+### Fast-Path Filtering
+
+**Benchmark (from benchmark_test.go:375):**
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithOutput(io.Discard),
+    go_logs.WithLevel(go_logs.ErrorLevel), // Filter out Info
+)
+
+// Benchmark result: 0.32 ns/op, 0 allocs/op
+logger.Info("filtered message")
+```
+
+**Result:** Messages below the threshold are filtered in < 1 nanosecond with zero allocations.
+
+### Logging Performance
+
+**Without Fields (from benchmark_test.go:354):**
+
+```go
+logger, _ := go_logs.New(go_logs.WithOutput(io.Discard))
+
+// Benchmark: ~220 ns/op
+logger.Info("test message")
+```
+
+**With Fields (from benchmark_test.go:363):**
+
+```go
+// Benchmark: ~250 ns/op
+logger.Info("test message",
+    go_logs.String("key1", "value1"),
+    go_logs.Int("key2", 42),
+    go_logs.Float64("key3", 3.14),
+)
+```
+
+## Thread Safety
+
+All logging methods are thread-safe and can be called concurrently:
+
+**Test Example (from logger_test.go:323):**
+
+```go
+buf := &bytes.Buffer{}
+logger, _ := go_logs.New(
+    go_logs.WithOutput(buf),
+    go_logs.WithLevel(go_logs.InfoLevel),
+)
+
+// Log from 10 concurrent goroutines
+for i := 0; i < 10; i++ {
+    go func(id int) {
+        logger.Info("goroutine message", go_logs.Int("id", id))
+    }(i)
+}
+
+// All 10 messages are safely written
+```
+
+## Dynamic Level Changes
+
+You can change the log level at runtime:
+
+**Test Example (from logger_test.go:129):**
+
+```go
+buf := &bytes.Buffer{}
+logger, _ := go_logs.New(
+    go_logs.WithOutput(buf),
+    go_logs.WithLevel(go_logs.ErrorLevel),
+)
+
+// Filtered at ErrorLevel
+logger.Info("initial info")
+
+// Change level to InfoLevel
+logger.SetLevel(go_logs.InfoLevel)
+
+// Now logged
+logger.Info("new info")
+```
+
+## Empty Messages
+
+Logging methods handle empty messages:
+
+**Test Example (from logger_test.go:463):**
+
+```go
+logger.Info("") // Empty message
+
+output := buf.String()
+// Still logs with level: "INFO"
+```
+
+## No Fields
+
+Logging methods work without any fields:
+
+**Test Example (from logger_test.go:477):**
+
+```go
+logger.Info("message without fields")
+
+output := buf.String()
+// Contains: "message without fields"
+```
+
+## Common Patterns
+
+### Error Handling Pattern
+
+```go
+func (s *Service) ProcessData(data []byte) error {
+    if len(data) == 0 {
+        s.logger.Error("Empty data received",
+            go_logs.String("source", "ProcessData"),
+        )
+        return errors.New("empty data")
+    }
+
+    s.logger.Debug("Processing data",
+        go_logs.Int("size_bytes", len(data)),
+    )
+
+    // Process data...
+
+    s.logger.Info("Data processed successfully",
+        go_logs.Int("records", 100),
+    )
+
+    return nil
+}
+```
+
+### HTTP Request Logging
+
+```go
+func (s *Service) LogRequest(r *http.Request, statusCode int, duration time.Duration) {
+    s.logger.Info("HTTP request",
+        go_logs.String("method", r.Method),
+        go_logs.String("path", r.URL.Path),
+        go_logs.Int("status", statusCode),
+        go_logs.Float64("duration_ms", duration.Seconds()*1000),
+        go_logs.String("user_agent", r.UserAgent()),
+    )
+}
+```
+
+### Conditional Debug Logging
+
+```go
+if logger.GetLevel() >= go_logs.DebugLevel {
+    // Only perform expensive operation if debug is enabled
+    debugData := collectExpensiveDebugInfo()
+    logger.Debug("Debug information",
+        go_logs.Any("data", debugData),
+    )
+}
+```
+
+### Panic Recovery with Fatal
+
+```go
+func main() {
+    logger, err := go_logs.New()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    defer func() {
+        if r := recover(); r != nil {
+            logger.Fatal("Panic recovered",
+                go_logs.Any("panic", r),
+                go_logs.String("stack", string(debug.Stack())),
+            )
+        }
+    }()
+
+    // Application code...
+}
+```
+
+## See Also
+
+- [Logger Interface](/api/logger) - Interface documentation
+- [New()](/api/new) - Constructor function
+- [Structured Fields](/fields) - Field types and usage
+- [Levels](/levels) - Log level details

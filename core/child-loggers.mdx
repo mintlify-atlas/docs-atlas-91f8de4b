@@ -1,0 +1,416 @@
+---
+title: "Child Loggers"
+description: "Create child loggers with inherited fields using With()"
+---
+
+## Overview
+
+Child loggers allow you to create **derived logger instances** that inherit all configuration from a parent logger and automatically include pre-defined fields in every log message.
+
+This is useful for:
+- Adding request context (request_id, user_id)
+- Service/component identification
+- Multi-tenant logging
+- Distributed tracing correlation
+
+## The With() Method
+
+The `With()` method creates a child logger with additional fields:
+
+```go logger.go
+// With creates a child logger with pre-pended fields.
+//
+// The child logger inherits all configuration from the parent but adds
+// the provided fields to every log message. This is useful for adding
+// context like request_id, user_id, service name, etc.
+//
+// The parent logger is not modified.
+With(fields ...Field) Logger
+```
+
+## Basic Usage
+
+### Creating a Child Logger
+
+```go
+import "github.com/drossan/go_logs"
+
+// Create base logger
+baseLogger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+)
+
+// Create child logger with inherited fields
+requestLogger := baseLogger.With(
+    go_logs.String("request_id", "abc-123"),
+    go_logs.String("user_id", "user-456"),
+)
+
+// All logs from requestLogger include request_id and user_id
+requestLogger.Info("Request started")           // Includes request_id + user_id
+requestLogger.Info("Processing")                // Includes request_id + user_id
+requestLogger.Info("Request completed")         // Includes request_id + user_id
+
+// Base logger is unchanged
+baseLogger.Info("Server running")               // No request_id or user_id
+```
+
+**Output**:
+```
+[2026/03/03 10:30:00] INFO Request started request_id=abc-123 user_id=user-456
+[2026/03/03 10:30:01] INFO Processing request_id=abc-123 user_id=user-456
+[2026/03/03 10:30:02] INFO Request completed request_id=abc-123 user_id=user-456
+[2026/03/03 10:30:03] INFO Server running
+```
+
+## How It Works
+
+Child loggers are implemented by copying parent configuration and appending fields:
+
+```go logger_impl.go
+// With implements Logger.With
+func (l *LoggerImpl) With(fields ...Field) Logger {
+    // Create child logger with parent's fields + new fields
+    childFields := append(l.fields, fields...)
+
+    return &LoggerImpl{
+        level:            l.level,
+        output:           l.output,
+        formatter:        l.formatter,
+        hooks:            l.hooks,
+        redactor:         l.redactor,
+        parent:           l,
+        fields:           childFields,  // Inherited + new fields
+        flags:            l.flags,
+        enableCaller:     l.enableCaller,
+        callerSkip:       l.callerSkip,
+        callerLevel:      l.callerLevel,
+        enableStackTrace: l.enableStackTrace,
+        stackTraceLevel:  l.stackTraceLevel,
+        metrics:          l.metrics,  // Share metrics with parent
+    }
+}
+```
+
+<Note>
+  Child loggers **share the same metrics** as the parent, so all logs are counted together.
+</Note>
+
+## Field Combination
+
+When logging, child fields are combined with explicit fields:
+
+```go logger_impl.go
+// combineFields merges inherited fields with new fields
+func (l *LoggerImpl) combineFields(fields []Field) []Field {
+    if len(l.fields) == 0 {
+        return fields
+    }
+
+    // Create a new slice with parent fields + new fields
+    combined := make([]Field, 0, len(l.fields)+len(fields))
+    combined = append(combined, l.fields...)  // Inherited first
+    combined = append(combined, fields...)    // Explicit second
+    return combined
+}
+```
+
+**Order**: Inherited fields appear **before** explicit fields.
+
+## Common Use Cases
+
+### HTTP Request Context
+
+```go
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+    // Create request-scoped logger
+    requestLogger := baseLogger.With(
+        go_logs.String("request_id", generateRequestID()),
+        go_logs.String("method", r.Method),
+        go_logs.String("path", r.URL.Path),
+        go_logs.String("remote_addr", r.RemoteAddr),
+    )
+    
+    requestLogger.Info("Request received")
+    
+    // Pass to business logic
+    processRequest(requestLogger, r)
+    
+    requestLogger.Info("Request completed")
+}
+
+func processRequest(logger go_logs.Logger, r *http.Request) {
+    // All logs here automatically include request context
+    logger.Debug("Validating input")
+    logger.Info("Calling database")
+    logger.Info("Returning response")
+}
+```
+
+### Service/Component Identification
+
+```go
+type UserService struct {
+    logger go_logs.Logger
+    db     *Database
+}
+
+func NewUserService(baseLogger go_logs.Logger, db *Database) *UserService {
+    return &UserService{
+        logger: baseLogger.With(
+            go_logs.String("service", "user-service"),
+            go_logs.String("component", "backend"),
+        ),
+        db: db,
+    }
+}
+
+func (s *UserService) CreateUser(user *User) error {
+    // All logs include service=user-service component=backend
+    s.logger.Info("Creating user", go_logs.String("username", user.Username))
+    
+    if err := s.db.Insert(user); err != nil {
+        s.logger.Error("Failed to create user", go_logs.Err(err))
+        return err
+    }
+    
+    s.logger.Info("User created successfully", go_logs.Int64("user_id", user.ID))
+    return nil
+}
+```
+
+### Multi-Tenant Logging
+
+```go
+type TenantHandler struct {
+    baseLogger go_logs.Logger
+}
+
+func (h *TenantHandler) HandleTenantRequest(tenantID string, req *Request) {
+    // Create tenant-scoped logger
+    tenantLogger := h.baseLogger.With(
+        go_logs.String("tenant_id", tenantID),
+        go_logs.String("tenant_name", getTenantName(tenantID)),
+    )
+    
+    tenantLogger.Info("Processing tenant request")
+    
+    // All downstream logs include tenant context
+    processTenantData(tenantLogger, req)
+}
+```
+
+### Nested Child Loggers
+
+You can create child loggers from child loggers:
+
+```go
+// Base logger
+baseLogger, _ := go_logs.New()
+
+// Service logger
+serviceLogger := baseLogger.With(
+    go_logs.String("service", "api"),
+)
+
+// Request logger (inherits service field)
+requestLogger := serviceLogger.With(
+    go_logs.String("request_id", "req-123"),
+)
+
+// User logger (inherits service + request_id)
+userLogger := requestLogger.With(
+    go_logs.String("user_id", "user-456"),
+)
+
+// All logs include service + request_id + user_id
+userLogger.Info("User action performed")
+// Output: ... service=api request_id=req-123 user_id=user-456
+```
+
+## Inherited Configuration
+
+Child loggers inherit **all configuration** from the parent:
+
+- ✅ Log level
+- ✅ Output destination
+- ✅ Formatter (Text/JSON)
+- ✅ Hooks
+- ✅ Redactor
+- ✅ Flags
+- ✅ Caller settings
+- ✅ Stack trace settings
+- ✅ Metrics (shared)
+
+```go
+// Parent with specific configuration
+parentLogger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithOutput(os.Stdout),
+)
+
+// Child inherits all configuration
+childLogger := parentLogger.With(
+    go_logs.String("component", "database"),
+)
+
+// childLogger uses:
+// - DebugLevel (inherited)
+// - JSONFormatter (inherited)
+// - os.Stdout output (inherited)
+// - Plus component=database field
+```
+
+## Changing Parent Configuration
+
+Changing the parent's configuration **does NOT affect** existing child loggers:
+
+```go
+baseLogger, _ := go_logs.New(go_logs.WithLevel(go_logs.InfoLevel))
+
+childLogger := baseLogger.With(go_logs.String("component", "db"))
+
+// Change parent level
+baseLogger.SetLevel(go_logs.DebugLevel)
+
+// childLogger still uses InfoLevel (copied at creation time)
+childLogger.Debug("This won't be logged")  // Still at InfoLevel
+```
+
+<Warning>
+  Child loggers copy configuration at creation time. Changing the parent after creating children does not affect them.
+</Warning>
+
+## Real-World Example: HTTP Middleware
+
+```go
+import (
+    "context"
+    "net/http"
+    "github.com/drossan/go_logs"
+)
+
+// Context key for logger
+type contextKey string
+const loggerKey = contextKey("logger")
+
+// Middleware to add request-scoped logger to context
+func LoggingMiddleware(baseLogger go_logs.Logger) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            // Create request-scoped logger
+            requestLogger := baseLogger.With(
+                go_logs.String("request_id", generateRequestID()),
+                go_logs.String("method", r.Method),
+                go_logs.String("path", r.URL.Path),
+                go_logs.String("remote_addr", r.RemoteAddr),
+            )
+            
+            // Add to context
+            ctx := context.WithValue(r.Context(), loggerKey, requestLogger)
+            
+            requestLogger.Info("Request started")
+            
+            // Call next handler
+            next.ServeHTTP(w, r.WithContext(ctx))
+            
+            requestLogger.Info("Request completed")
+        })
+    }
+}
+
+// Extract logger from context
+func GetLogger(ctx context.Context) go_logs.Logger {
+    if logger, ok := ctx.Value(loggerKey).(go_logs.Logger); ok {
+        return logger
+    }
+    // Fallback to default logger
+    logger, _ := go_logs.New()
+    return logger
+}
+
+// Handler using context logger
+func handleUser(w http.ResponseWriter, r *http.Request) {
+    logger := GetLogger(r.Context())
+    
+    // All logs include request context
+    logger.Info("Fetching user")
+    logger.Debug("Validating permissions")
+    logger.Info("User fetched successfully")
+}
+```
+
+## Performance
+
+Child logger creation is **lightweight**:
+
+- **No locks** during creation
+- **Shared metrics** (no duplication)
+- **Field append** is simple slice operation
+- **Configuration copy** is struct copy (cheap)
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Create child loggers at request/operation boundaries">
+    ```go
+    // Good: Create at request boundary
+    func handleRequest(w http.ResponseWriter, r *http.Request) {
+        reqLogger := baseLogger.With(
+            go_logs.String("request_id", generateRequestID()),
+        )
+        processRequest(reqLogger, r)
+    }
+    
+    // Bad: Create in tight loop
+    func processBatch(items []Item) {
+        for _, item := range items {
+            itemLogger := baseLogger.With(go_logs.String("item_id", item.ID))
+            // Creates 1000s of child loggers unnecessarily
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Use consistent field names across child loggers">
+    ```go
+    // Good: Consistent naming
+    serviceLogger := baseLogger.With(go_logs.String("service", "api"))
+    requestLogger := serviceLogger.With(go_logs.String("request_id", "123"))
+    
+    // Bad: Inconsistent naming
+    serviceLogger := baseLogger.With(go_logs.String("svc", "api"))
+    requestLogger := serviceLogger.With(go_logs.String("req_id", "123"))
+    ```
+  </Accordion>
+
+  <Accordion title="Pass child loggers through context or parameters">
+    ```go
+    // Good: Pass via context
+    ctx = context.WithValue(ctx, loggerKey, requestLogger)
+    processData(ctx, data)
+    
+    // Good: Pass as parameter
+    func processData(logger go_logs.Logger, data Data) {
+        logger.Info("Processing")
+    }
+    
+    // Bad: Use global logger
+    func processData(data Data) {
+        globalLogger.Info("Processing")  // Loses context
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Context Propagation" icon="share-nodes" href="/core/context-propagation">
+    Automatically extract trace_id and span_id from context
+  </Card>
+  <Card title="Hooks" icon="plug" href="/features/hooks">
+    Extend logging behavior with custom hooks
+  </Card>
+</CardGroup>

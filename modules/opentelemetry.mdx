@@ -1,0 +1,483 @@
+---
+title: OpenTelemetry Integration
+description: Export logs to OpenTelemetry collectors via OTLP protocol
+---
+
+The `otel` module provides integration with OpenTelemetry, enabling you to export logs to OTLP-compatible collectors like Jaeger, Grafana Tempo, or the OpenTelemetry Collector.
+
+## Features
+
+- **OTLP protocol** support
+- **Automatic batching** with configurable flush intervals
+- **HTTP/JSON export** to collectors
+- **Custom headers** for authentication
+- **Hook-based integration** with go_logs
+- **Background flushing** for performance
+
+## Installation
+
+```bash
+go get github.com/drossan/go_logs/otel
+```
+
+## Basic Usage
+
+### Using the Hook
+
+```go
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/otel"
+)
+
+func main() {
+    // Create OTLP hook
+    otlpHook := otel.NewOTLPHook("http://localhost:4318/v1/logs")
+    defer otlpHook.Close()
+
+    // Create logger with OTLP hook
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHook(otlpHook),
+    )
+
+    // Logs will be exported to OTLP collector
+    logger.Info("User logged in",
+        go_logs.String("user_id", "user-123"),
+        go_logs.String("ip", "192.168.1.1"),
+    )
+}
+```
+
+### Direct Exporter Usage
+
+```go
+import "github.com/drossan/go_logs/otel"
+
+// Create exporter with default config
+exporter := otel.NewOTLPExporter("http://localhost:4318/v1/logs")
+defer exporter.Close()
+
+// Export logs manually
+entry := &go_logs.Entry{
+    Timestamp: time.Now(),
+    Level:     go_logs.InfoLevel,
+    Message:   "Application started",
+    Fields:    []go_logs.Field{go_logs.Int("port", 8080)},
+}
+
+exporter.Export(entry)
+exporter.Flush() // Force immediate flush
+```
+
+## Configuration
+
+### OTLPConfig
+
+```go
+type OTLPConfig struct {
+    // Endpoint is the OTLP collector URL
+    Endpoint string
+
+    // Headers are additional HTTP headers to send
+    Headers map[string]string
+
+    // MaxPending is the maximum number of entries to buffer before flushing
+    MaxPending int
+
+    // FlushInterval is how often to flush pending entries
+    FlushInterval time.Duration
+
+    // Timeout is the HTTP client timeout
+    Timeout time.Duration
+}
+```
+
+### Custom Configuration
+
+```go
+import "time"
+
+config := otel.OTLPConfig{
+    Endpoint:      "https://otlp-collector.example.com/v1/logs",
+    MaxPending:    500,              // Buffer up to 500 logs
+    FlushInterval: 10 * time.Second, // Flush every 10 seconds
+    Timeout:       30 * time.Second, // HTTP timeout
+    Headers: map[string]string{
+        "Authorization": "Bearer your-token",
+        "X-Scope-OrgID": "tenant-123",
+    },
+}
+
+exporter := otel.NewOTLPExporterWithConfig(config)
+defer exporter.Close()
+```
+
+### Default Values
+
+- **MaxPending**: 100 entries
+- **FlushInterval**: 5 seconds
+- **Timeout**: 30 seconds
+- **Headers**: none
+
+## Hook Configuration
+
+### Minimum Level Filtering
+
+```go
+// Only export INFO and above to OTLP
+exporter := otel.NewOTLPExporter("http://localhost:4318/v1/logs")
+hook := otel.NewOTLPHookWithExporter(exporter, go_logs.InfoLevel)
+
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel), // Log everything locally
+    go_logs.WithHook(hook),                 // But only INFO+ to OTLP
+)
+
+logger.Debug("Local only")     // Not sent to OTLP
+logger.Info("Sent to OTLP")    // Sent to OTLP
+```
+
+### Dynamic Level Changes
+
+```go
+hook := otel.NewOTLPHook("http://localhost:4318/v1/logs")
+
+// Start with INFO
+hook.SetLevel(go_logs.InfoLevel)
+
+// Change to ERROR only
+hook.SetLevel(go_logs.ErrorLevel)
+```
+
+## Integration Examples
+
+### Grafana Loki
+
+```go
+import (
+    "os"
+    "github.com/drossan/go_logs/otel"
+)
+
+config := otel.OTLPConfig{
+    Endpoint: "http://loki:3100/otlp/v1/logs",
+    Headers: map[string]string{
+        "X-Scope-OrgID": os.Getenv("LOKI_TENANT_ID"),
+    },
+    MaxPending:    200,
+    FlushInterval: 5 * time.Second,
+}
+
+exporter := otel.NewOTLPExporterWithConfig(config)
+hook := otel.NewOTLPHookWithExporter(exporter, go_logs.InfoLevel)
+
+logger, _ := go_logs.New(
+    go_logs.WithHook(hook),
+    go_logs.WithLevel(go_logs.InfoLevel),
+)
+```
+
+### OpenTelemetry Collector
+
+```go
+config := otel.OTLPConfig{
+    Endpoint: "http://otel-collector:4318/v1/logs",
+    Headers: map[string]string{
+        "Content-Type": "application/json",
+    },
+}
+
+exporter := otel.NewOTLPExporterWithConfig(config)
+hook := otel.NewOTLPHookWithExporter(exporter, go_logs.DebugLevel)
+
+logger, _ := go_logs.New(
+    go_logs.WithHook(hook),
+)
+```
+
+### Jaeger (via OTLP)
+
+```go
+config := otel.OTLPConfig{
+    Endpoint:      "http://jaeger:4318/v1/logs",
+    MaxPending:    100,
+    FlushInterval: 5 * time.Second,
+}
+
+exporter := otel.NewOTLPExporterWithConfig(config)
+hook := otel.NewOTLPHookWithExporter(exporter, go_logs.InfoLevel)
+```
+
+## OTLP Format
+
+Logs are exported in OTLP-compatible JSON format:
+
+```json
+{
+  "resourceLogs": [
+    {
+      "observedTimestamp": "2024-03-15T10:30:00.123456Z",
+      "body": "User logged in",
+      "attributes": {
+        "severity": "INFO",
+        "user_id": "user-123",
+        "ip": "192.168.1.1",
+        "code.filepath": "/app/main.go",
+        "code.lineno": 42,
+        "code.function": "main.handleLogin"
+      }
+    }
+  ]
+}
+```
+
+### Attributes Mapping
+
+- **severity**: Log level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL)
+- **user fields**: All go_logs.Field values
+- **code.filepath**: Source file (if caller tracking enabled)
+- **code.lineno**: Line number
+- **code.function**: Function name
+
+## Complete Production Example
+
+```go
+package main
+
+import (
+    "context"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/otel"
+)
+
+func main() {
+    // Configure OTLP exporter
+    otlpConfig := otel.OTLPConfig{
+        Endpoint:      os.Getenv("OTLP_ENDPOINT"),
+        MaxPending:    500,
+        FlushInterval: 10 * time.Second,
+        Timeout:       30 * time.Second,
+        Headers: map[string]string{
+            "Authorization": "Bearer " + os.Getenv("OTLP_TOKEN"),
+        },
+    }
+
+    exporter := otel.NewOTLPExporterWithConfig(otlpConfig)
+    defer exporter.Close()
+
+    // Create OTLP hook (INFO and above)
+    otlpHook := otel.NewOTLPHookWithExporter(exporter, go_logs.InfoLevel)
+    defer otlpHook.Close()
+
+    // Create logger with multiple outputs
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.DebugLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+        go_logs.WithHook(otlpHook), // Send to OTLP
+    )
+
+    logger.Info("Application started",
+        go_logs.String("version", "1.0.0"),
+        go_logs.String("environment", os.Getenv("ENV")),
+    )
+
+    // HTTP server
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        reqLogger := logger.With(
+            go_logs.String("request_id", generateRequestID()),
+            go_logs.String("method", r.Method),
+            go_logs.String("path", r.URL.Path),
+        )
+
+        reqLogger.Info("Request received")
+        
+        // Business logic...
+        
+        reqLogger.Info("Request completed",
+            go_logs.Int("status", http.StatusOK),
+            go_logs.Int64("duration_ms", 42),
+        )
+
+        w.WriteHeader(http.StatusOK)
+    })
+
+    // Start server
+    srv := &http.Server{Addr: ":8080"}
+    go func() {
+        logger.Info("Server listening", go_logs.Int("port", 8080))
+        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            logger.Fatal("Server failed", go_logs.Err(err))
+        }
+    }()
+
+    // Graceful shutdown
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+    <-sigChan
+
+    logger.Info("Shutting down gracefully")
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    if err := srv.Shutdown(ctx); err != nil {
+        logger.Error("Shutdown error", go_logs.Err(err))
+    }
+
+    // Flush remaining logs
+    logger.Sync()
+    logger.Info("Shutdown complete")
+}
+
+func generateRequestID() string {
+    return fmt.Sprintf("req-%d", time.Now().UnixNano())
+}
+```
+
+## Docker Compose Setup
+
+```yaml
+version: '3.8'
+
+services:
+  # Your application
+  app:
+    build: .
+    environment:
+      OTLP_ENDPOINT: http://otel-collector:4318/v1/logs
+      OTLP_TOKEN: ${OTLP_TOKEN}
+    depends_on:
+      - otel-collector
+
+  # OpenTelemetry Collector
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4318:4318"  # OTLP HTTP
+
+  # Jaeger (as backend)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC
+```
+
+**otel-collector-config.yaml:**
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  jaeger:
+    endpoint: jaeger:14250
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      exporters: [jaeger]
+```
+
+## Performance Considerations
+
+### Batching
+
+Logs are automatically batched and flushed:
+- When `MaxPending` entries are buffered
+- Every `FlushInterval` duration
+- On `Close()` or `Flush()` call
+
+### Async Export
+
+```go
+// Hook.Run() is called synchronously during logging
+// But export happens asynchronously in background
+hook := otel.NewOTLPHook("http://localhost:4318/v1/logs")
+
+// This returns immediately after buffering
+logger.Info("Fast log")  // Non-blocking
+```
+
+### Buffer Size Tuning
+
+```go
+// Low volume: smaller buffer, faster flush
+config := otel.OTLPConfig{
+    MaxPending:    50,
+    FlushInterval: 2 * time.Second,
+}
+
+// High volume: larger buffer, less frequent flush
+config := otel.OTLPConfig{
+    MaxPending:    1000,
+    FlushInterval: 30 * time.Second,
+}
+```
+
+## Error Handling
+
+Export errors are handled gracefully:
+
+```go
+// Failed exports don't crash the application
+logger.Info("This will log even if OTLP collector is down")
+
+// Errors are returned from Flush()
+if err := exporter.Flush(); err != nil {
+    log.Printf("OTLP export failed: %v", err)
+}
+```
+
+## Best Practices
+
+1. **Always close exporters** on shutdown
+   ```go
+   defer exporter.Close()
+   defer hook.Close()
+   ```
+
+2. **Use level filtering** to reduce OTLP volume
+   ```go
+   hook := otel.NewOTLPHookWithExporter(exporter, go_logs.WarnLevel)
+   ```
+
+3. **Configure timeouts** for network reliability
+   ```go
+   config.Timeout = 10 * time.Second
+   ```
+
+4. **Tune batch sizes** for your workload
+   ```go
+   config.MaxPending = 500
+   config.FlushInterval = 10 * time.Second
+   ```
+
+5. **Use authentication** in production
+   ```go
+   config.Headers = map[string]string{
+       "Authorization": "Bearer " + token,
+   }
+   ```
+
+## See Also
+
+- [Hooks](/advanced/hooks) - Hook system overview
+- [Formatters](/core/formatters) - Log output formatting
+- [Production Setup](/guides/production) - Deployment guide

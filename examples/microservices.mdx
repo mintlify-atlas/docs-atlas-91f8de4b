@@ -1,0 +1,475 @@
+---
+title: 'Microservices Logging Patterns'
+description: 'Distributed tracing, service mesh logging, and inter-service communication'
+icon: 'cubes'
+---
+
+## Service Logger Factory
+
+Create standardized loggers across all microservices:
+
+```go
+package logging
+
+import (
+    "os"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/async"
+)
+
+type ServiceLoggerConfig struct {
+    ServiceName string
+    Version     string
+    Environment string
+    LogLevel    go_logs.Level
+}
+
+func NewServiceLogger(cfg ServiceLoggerConfig) (go_logs.Logger, error) {
+    // Create base logger with JSON output
+    syncLogger, err := go_logs.New(
+        go_logs.WithLevel(cfg.LogLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithRotatingFile(
+            fmt.Sprintf("/var/log/%s.log", cfg.ServiceName),
+            100, 5,
+        ),
+        go_logs.WithCommonRedaction(),
+    )
+    if err != nil {
+        return nil, err
+    }
+    
+    // Wrap with async logger for performance
+    asyncLogger := async.Wrap(syncLogger, 10000)
+    
+    // Add service-level fields that appear in all logs
+    serviceLogger := asyncLogger.With(
+        go_logs.String("service", cfg.ServiceName),
+        go_logs.String("version", cfg.Version),
+        go_logs.String("environment", cfg.Environment),
+        go_logs.String("hostname", getHostname()),
+    )
+    
+    return serviceLogger, nil
+}
+
+func getHostname() string {
+    hostname, _ := os.Hostname()
+    return hostname
+}
+```
+
+## Distributed Tracing with Context Propagation
+
+Propagate trace IDs across service boundaries:
+
+```go
+package main
+
+import (
+    "context"
+    "net/http"
+    
+    "github.com/drossan/go_logs"
+)
+
+// TracingMiddleware extracts or generates trace ID
+func TracingMiddleware(logger go_logs.Logger) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            // Extract trace ID from incoming request header
+            traceID := r.Header.Get("X-Trace-ID")
+            if traceID == "" {
+                // Generate new trace ID if not present
+                traceID = generateTraceID()
+            }
+            
+            spanID := generateSpanID()
+            
+            // Add trace context
+            ctx := go_logs.WithTraceID(r.Context(), traceID)
+            ctx = go_logs.WithSpanID(ctx, spanID)
+            
+            // Create request logger with tracing fields
+            reqLogger := logger.With(
+                go_logs.String("trace_id", traceID),
+                go_logs.String("span_id", spanID),
+                go_logs.String("method", r.Method),
+                go_logs.String("path", r.URL.Path),
+            )
+            
+            // Log request start
+            reqLogger.LogCtx(ctx, go_logs.InfoLevel, "Request received")
+            
+            // Add trace ID to response header for downstream services
+            w.Header().Set("X-Trace-ID", traceID)
+            
+            // Store logger in context
+            ctx = context.WithValue(ctx, loggerKey, reqLogger)
+            
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+}
+```
+
+## Inter-Service HTTP Client with Tracing
+
+Propagate trace context when calling other services:
+
+```go
+package client
+
+import (
+    "context"
+    "fmt"
+    "io"
+    "net/http"
+    "time"
+    
+    "github.com/drossan/go_logs"
+)
+
+type ServiceClient struct {
+    baseURL    string
+    httpClient *http.Client
+    logger     go_logs.Logger
+}
+
+func NewServiceClient(baseURL string, logger go_logs.Logger) *ServiceClient {
+    return &ServiceClient{
+        baseURL: baseURL,
+        httpClient: &http.Client{
+            Timeout: 30 * time.Second,
+        },
+        logger: logger,
+    }
+}
+
+func (c *ServiceClient) Get(ctx context.Context, path string) ([]byte, error) {
+    url := c.baseURL + path
+    
+    // Create request
+    req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Propagate trace ID from context
+    if traceID := go_logs.GetTraceID(ctx); traceID != "" {
+        req.Header.Set("X-Trace-ID", traceID)
+    }
+    
+    // Log outgoing request
+    c.logger.LogCtx(ctx, go_logs.InfoLevel, "Calling downstream service",
+        go_logs.String("url", url),
+        go_logs.String("method", "GET"),
+    )
+    
+    start := time.Now()
+    resp, err := c.httpClient.Do(req)
+    duration := time.Since(start)
+    
+    if err != nil {
+        c.logger.Error("Downstream service call failed",
+            go_logs.Err(err),
+            go_logs.String("url", url),
+            go_logs.Float64("duration_ms", float64(duration.Milliseconds())),
+        )
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    body, err := io.ReadAll(resp.Body)
+    
+    // Log response
+    c.logger.LogCtx(ctx, go_logs.InfoLevel, "Downstream service responded",
+        go_logs.String("url", url),
+        go_logs.Int("status_code", resp.StatusCode),
+        go_logs.Float64("duration_ms", float64(duration.Milliseconds())),
+        go_logs.Int("response_size", len(body)),
+    )
+    
+    if resp.StatusCode >= 400 {
+        return body, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+    }
+    
+    return body, err
+}
+```
+
+## Complete Microservice Example
+
+User service with distributed tracing:
+
+```go
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "net/http"
+    "time"
+    
+    "github.com/drossan/go_logs"
+)
+
+type UserService struct {
+    logger       go_logs.Logger
+    ordersClient *ServiceClient
+}
+
+func NewUserService(logger go_logs.Logger) *UserService {
+    return &UserService{
+        logger:       logger,
+        ordersClient: NewServiceClient("http://orders-service:8081", logger),
+    }
+}
+
+func (s *UserService) GetUserWithOrders(ctx context.Context, userID string) (*UserResponse, error) {
+    logger := getLogger(ctx)
+    
+    // Log service operation start
+    logger.Info("Fetching user with orders",
+        go_logs.String("user_id", userID),
+    )
+    
+    // Fetch user from database
+    user, err := s.fetchUser(ctx, userID)
+    if err != nil {
+        logger.Error("Failed to fetch user",
+            go_logs.Err(err),
+            go_logs.String("user_id", userID),
+        )
+        return nil, err
+    }
+    
+    logger.Debug("User fetched from database",
+        go_logs.String("user_id", userID),
+        go_logs.String("username", user.Username),
+    )
+    
+    // Fetch orders from orders service (trace ID propagated)
+    orders, err := s.fetchOrders(ctx, userID)
+    if err != nil {
+        logger.Warn("Failed to fetch orders, continuing without them",
+            go_logs.Err(err),
+            go_logs.String("user_id", userID),
+        )
+        // Degrade gracefully - return user without orders
+        return &UserResponse{User: user, Orders: []Order{}}, nil
+    }
+    
+    logger.Info("User with orders fetched successfully",
+        go_logs.String("user_id", userID),
+        go_logs.Int("order_count", len(orders)),
+    )
+    
+    return &UserResponse{User: user, Orders: orders}, nil
+}
+
+func (s *UserService) fetchUser(ctx context.Context, userID string) (*User, error) {
+    logger := getLogger(ctx)
+    
+    logger.Debug("Querying user database",
+        go_logs.String("user_id", userID),
+    )
+    
+    // Simulate database query
+    time.Sleep(10 * time.Millisecond)
+    
+    return &User{
+        ID:       userID,
+        Username: "john_doe",
+        Email:    "john@example.com",
+    }, nil
+}
+
+func (s *UserService) fetchOrders(ctx context.Context, userID string) ([]Order, error) {
+    // This call propagates trace_id via HTTP headers
+    body, err := s.ordersClient.Get(ctx, "/api/orders?user_id="+userID)
+    if err != nil {
+        return nil, err
+    }
+    
+    var orders []Order
+    if err := json.Unmarshal(body, &orders); err != nil {
+        return nil, err
+    }
+    
+    return orders, nil
+}
+
+type User struct {
+    ID       string `json:"id"`
+    Username string `json:"username"`
+    Email    string `json:"email"`
+}
+
+type Order struct {
+    ID     string  `json:"id"`
+    Amount float64 `json:"amount"`
+}
+
+type UserResponse struct {
+    User   *User   `json:"user"`
+    Orders []Order `json:"orders"`
+}
+```
+
+## Service Mesh Integration
+
+Log sidecar proxy information (Istio/Envoy):
+
+```go
+func ServiceMeshMiddleware(logger go_logs.Logger) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            reqLogger := logger.With(
+                // Istio/Envoy headers
+                go_logs.String("x_request_id", r.Header.Get("X-Request-ID")),
+                go_logs.String("x_b3_traceid", r.Header.Get("X-B3-TraceId")),
+                go_logs.String("x_b3_spanid", r.Header.Get("X-B3-SpanId")),
+                go_logs.String("x_forwarded_for", r.Header.Get("X-Forwarded-For")),
+            )
+            
+            ctx := context.WithValue(r.Context(), loggerKey, reqLogger)
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+}
+```
+
+## Health Check Endpoint
+
+Standardized health checks across services:
+
+```go
+type HealthChecker struct {
+    logger      go_logs.Logger
+    serviceName string
+    version     string
+}
+
+func (h *HealthChecker) HandleHealth(w http.ResponseWriter, r *http.Request) {
+    h.logger.Debug("Health check requested")
+    
+    status := h.checkHealth()
+    
+    w.Header().Set("Content-Type", "application/json")
+    
+    if status.Healthy {
+        w.WriteHeader(http.StatusOK)
+    } else {
+        w.WriteHeader(http.StatusServiceUnavailable)
+        h.logger.Warn("Service unhealthy",
+            go_logs.Any("checks", status.Checks),
+        )
+    }
+    
+    json.NewEncoder(w).Encode(status)
+}
+
+func (h *HealthChecker) checkHealth() HealthStatus {
+    checks := make(map[string]bool)
+    
+    // Check database
+    checks["database"] = h.checkDatabase()
+    
+    // Check downstream services
+    checks["orders_service"] = h.checkOrdersService()
+    
+    allHealthy := true
+    for _, healthy := range checks {
+        if !healthy {
+            allHealthy = false
+            break
+        }
+    }
+    
+    return HealthStatus{
+        Healthy:     allHealthy,
+        Service:     h.serviceName,
+        Version:     h.version,
+        Timestamp:   time.Now(),
+        Checks:      checks,
+    }
+}
+
+type HealthStatus struct {
+    Healthy   bool              `json:"healthy"`
+    Service   string            `json:"service"`
+    Version   string            `json:"version"`
+    Timestamp time.Time         `json:"timestamp"`
+    Checks    map[string]bool   `json:"checks"`
+}
+```
+
+## Complete Microservice Setup
+
+```go
+package main
+
+import (
+    "fmt"
+    "net/http"
+    "os"
+    
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Initialize service logger
+    logger, _ := NewServiceLogger(ServiceLoggerConfig{
+        ServiceName: "user-service",
+        Version:     "1.2.3",
+        Environment: os.Getenv("ENVIRONMENT"),
+        LogLevel:    go_logs.InfoLevel,
+    })
+    defer logger.Sync()
+    
+    logger.Info("Service starting")
+    
+    // Initialize service
+    userService := NewUserService(logger)
+    healthChecker := &HealthChecker{
+        logger:      logger,
+        serviceName: "user-service",
+        version:     "1.2.3",
+    }
+    
+    // Setup routes
+    mux := http.NewServeMux()
+    mux.HandleFunc("/api/users/", func(w http.ResponseWriter, r *http.Request) {
+        handleGetUserWithOrders(userService, w, r)
+    })
+    mux.HandleFunc("/health", healthChecker.HandleHealth)
+    
+    // Apply middleware chain
+    handler := ServiceMeshMiddleware(logger)(
+        TracingMiddleware(logger)(
+            LoggingMiddleware(logger)(mux),
+        ),
+    )
+    
+    // Start server
+    port := 8080
+    logger.Info("Service ready",
+        go_logs.Int("port", port),
+    )
+    
+    http.ListenAndServe(fmt.Sprintf(":%d", port), handler)
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="OpenTelemetry Integration" icon="chart-network" href="/examples/opentelemetry">
+    Export logs to OTLP collectors
+  </Card>
+  <Card title="Production Setup" icon="rocket" href="/examples/production-setup">
+    Complete production deployment guide
+  </Card>
+</CardGroup>

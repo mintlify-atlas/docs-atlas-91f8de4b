@@ -1,0 +1,428 @@
+---
+title: 'SlackHook'
+description: 'Send log entries to Slack channels based on severity'
+---
+
+## Overview
+
+`SlackHook` sends log entries to Slack channels based on a configurable level threshold. Only logs at or above the threshold are sent, preventing spam from debug/info messages.
+
+This hook integrates with the existing SlackNotifier adapter and provides level-based filtering to ensure only important messages reach your Slack channels.
+
+## Type Definition
+
+```go
+type SlackHook struct {
+    notifier SlackNotifier
+    level    go_logs.Level // Minimum level to send to Slack
+}
+```
+
+## SlackNotifier Interface
+
+```go
+type SlackNotifier interface {
+    SendNotification(message string) error
+}
+```
+
+This interface allows mocking in tests and using the real adapter in production.
+
+## Constructor Function
+
+### NewSlackHook
+
+Creates a new Slack hook with the given notifier and level threshold.
+
+```go
+func NewSlackHook(notifier SlackNotifier, level go_logs.Level) *SlackHook
+```
+
+**Parameters:**
+- `notifier` - The SlackNotifier to use for sending messages
+- `level` - The minimum log level to send to Slack (e.g., ErrorLevel)
+
+**Returns:**
+- `*SlackHook` - A configured Hook that sends logs to Slack
+
+**Example:**
+```go
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/adapters"
+    "github.com/drossan/go_logs/hooks"
+)
+
+notifier, err := adapters.NewSlackNotifier()
+if err != nil {
+    log.Fatal(err)
+}
+
+// Only send Error and Fatal logs to Slack
+hook := hooks.NewSlackHook(notifier, go_logs.ErrorLevel)
+
+logger := go_logs.New(
+    go_logs.WithHooks(hook),
+)
+```
+
+**Location:** hooks/slack_hook.go:49
+
+## Methods
+
+### Run
+
+Implements Hook.Run by sending the log entry to Slack if it meets the level threshold.
+
+```go
+func (h *SlackHook) Run(entry *go_logs.Entry) error
+```
+
+**Parameters:**
+- `entry` - The log entry to potentially send to Slack
+
+**Returns:**
+- `error` - Error if sending to Slack failed, nil otherwise
+
+**Behavior:**
+- Returns nil immediately if entry level is below threshold (fast-path)
+- Formats the message using `formatMessage`
+- Sends to Slack using the notifier
+
+**Location:** hooks/slack_hook.go:78
+
+### GetLevel
+
+Returns the minimum log level that will be sent to Slack.
+
+```go
+func (h *SlackHook) GetLevel() go_logs.Level
+```
+
+**Returns:**
+- `go_logs.Level` - The current level threshold
+
+**Example:**
+```go
+if hook.GetLevel() == go_logs.ErrorLevel {
+    // Only errors and fatals are sent to Slack
+}
+```
+
+**Location:** hooks/slack_hook.go:125
+
+### SetLevel
+
+Changes the minimum log level threshold dynamically.
+
+```go
+func (h *SlackHook) SetLevel(level go_logs.Level)
+```
+
+**Parameters:**
+- `level` - The new minimum level to send to Slack
+
+**Example:**
+```go
+// Temporarily increase Slack verbosity during incident
+hook.SetLevel(go_logs.WarnLevel) // Send warnings, errors, and fatals
+
+// Later, restore normal behavior
+hook.SetLevel(go_logs.ErrorLevel) // Only errors and fatals
+```
+
+**Location:** hooks/slack_hook.go:140
+
+## Message Format
+
+SlackHook formats messages as:
+
+```
+[LEVEL] message key1=value1 key2=value2
+```
+
+**Example formatted messages:**
+```
+[ERROR] Database connection failed host=db.example.com port=5432 error=connection refused
+[FATAL] Application crashed error=nil pointer dereference
+[WARN] High memory usage memory_percent=89.5 threshold=80
+```
+
+## Usage Examples
+
+### Basic Setup
+
+```go
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/adapters"
+    "github.com/drossan/go_logs/hooks"
+)
+
+// Create Slack notifier (requires SLACK_TOKEN and SLACK_CHANNEL_ID env vars)
+notifier, err := adapters.NewSlackNotifier()
+if err != nil {
+    log.Fatalf("Failed to create Slack notifier: %v", err)
+}
+
+// Create hook that sends errors and fatals to Slack
+slackHook := hooks.NewSlackHook(notifier, go_logs.ErrorLevel)
+
+logger := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithHooks(slackHook),
+)
+
+// This won't go to Slack (below threshold)
+logger.Info("Server started", go_logs.Int("port", 8080))
+
+// This WILL go to Slack (at threshold)
+logger.Error("Database connection failed",
+    go_logs.String("host", "db.example.com"),
+    go_logs.Err(err),
+)
+```
+
+### Multiple Channels with Different Thresholds
+
+```go
+// Errors to #alerts channel
+alertsNotifier, _ := adapters.NewSlackNotifier()
+alertsHook := hooks.NewSlackHook(alertsNotifier, go_logs.ErrorLevel)
+
+// Warnings to #monitoring channel (requires different notifier)
+monitoringNotifier, _ := adapters.NewSlackNotifierWithConfig(
+    slackToken,
+    monitoringChannelID,
+)
+monitoringHook := hooks.NewSlackHook(monitoringNotifier, go_logs.WarnLevel)
+
+logger := go_logs.New(
+    go_logs.WithHooks(alertsHook, monitoringHook),
+)
+```
+
+### Dynamic Level Adjustment
+
+```go
+slackHook := hooks.NewSlackHook(notifier, go_logs.ErrorLevel)
+
+logger := go_logs.New(
+    go_logs.WithHooks(slackHook),
+)
+
+// During incident: increase verbosity
+func handleIncident() {
+    slackHook.SetLevel(go_logs.WarnLevel)
+    defer slackHook.SetLevel(go_logs.ErrorLevel) // Restore after
+    
+    // Now warnings will also go to Slack
+    logger.Warn("Investigating incident",
+        go_logs.String("incident_id", "INC-123"),
+    )
+}
+```
+
+### With Custom Notifier (Mock for Testing)
+
+```go
+type MockSlackNotifier struct {
+    messages []string
+}
+
+func (m *MockSlackNotifier) SendNotification(message string) error {
+    m.messages = append(m.messages, message)
+    return nil
+}
+
+// Test
+func TestSlackHook(t *testing.T) {
+    mock := &MockSlackNotifier{}
+    hook := hooks.NewSlackHook(mock, go_logs.ErrorLevel)
+    
+    logger := go_logs.New(go_logs.WithHooks(hook))
+    
+    // This should not be sent (below threshold)
+    logger.Info("test info")
+    assert.Len(t, mock.messages, 0)
+    
+    // This should be sent (at threshold)
+    logger.Error("test error")
+    assert.Len(t, mock.messages, 1)
+    assert.Contains(t, mock.messages[0], "[ERROR] test error")
+}
+```
+
+### Graceful Degradation
+
+```go
+// If Slack credentials are missing, notifier will be disabled
+notifier, err := adapters.NewSlackNotifier()
+if err != nil {
+    // Log warning but continue without Slack
+    fmt.Fprintf(os.Stderr, "Warning: Slack disabled: %v\n", err)
+    logger := go_logs.New() // No Slack hook
+    return logger
+}
+
+slackHook := hooks.NewSlackHook(notifier, go_logs.ErrorLevel)
+logger := go_logs.New(go_logs.WithHooks(slackHook))
+```
+
+### Environment-Based Configuration
+
+```go
+import "os"
+
+func createLogger() *go_logs.Logger {
+    opts := []go_logs.Option{
+        go_logs.WithLevel(go_logs.InfoLevel),
+    }
+    
+    // Only enable Slack in production
+    if os.Getenv("ENV") == "production" {
+        notifier, err := adapters.NewSlackNotifier()
+        if err == nil {
+            slackHook := hooks.NewSlackHook(notifier, go_logs.ErrorLevel)
+            opts = append(opts, go_logs.WithHooks(slackHook))
+        }
+    }
+    
+    return go_logs.New(opts...)
+}
+```
+
+## Configuration
+
+SlackHook requires SlackNotifier to be configured with:
+
+**Environment variables:**
+```bash
+SLACK_TOKEN=xoxb-your-token-here
+SLACK_CHANNEL_ID=C123456789
+```
+
+**Using adapters.NewSlackNotifier():**
+```go
+import "github.com/drossan/go_logs/adapters"
+
+// Reads SLACK_TOKEN and SLACK_CHANNEL_ID from environment
+notifier, err := adapters.NewSlackNotifier()
+if err != nil {
+    // Handle missing credentials
+}
+```
+
+## Best Practices
+
+<Tip>
+**Choose Appropriate Level**
+
+Use ErrorLevel or higher to avoid Slack spam:
+
+```go
+// Good: Only critical issues
+hook := hooks.NewSlackHook(notifier, go_logs.ErrorLevel)
+
+// Bad: Too verbose, will spam Slack
+hook := hooks.NewSlackHook(notifier, go_logs.InfoLevel)
+```
+</Tip>
+
+<Tip>
+**Level-Based Filtering**
+
+SlackHook performs fast-path level filtering before formatting:
+
+```go
+// If entry.Level < hook.level, returns immediately (no Slack call)
+if !entry.Level.ShouldLog(h.level) {
+    return nil
+}
+```
+
+This ensures minimal performance impact.
+</Tip>
+
+<Warning>
+**Slack Rate Limits**
+
+Slack has rate limits on API calls. If you log many errors:
+
+1. Use ErrorLevel or FatalLevel threshold
+2. Consider sampling or deduplication
+3. Use async processing if needed
+
+```go
+// Add rate limiting to notifier
+type RateLimitedNotifier struct {
+    notifier SlackNotifier
+    limiter  *rate.Limiter
+}
+
+func (r *RateLimitedNotifier) SendNotification(msg string) error {
+    if !r.limiter.Allow() {
+        return nil // Skip if rate limited
+    }
+    return r.notifier.SendNotification(msg)
+}
+```
+</Warning>
+
+<Warning>
+**Error Handling**
+
+If SlackHook.Run returns an error, it's logged but doesn't prevent other hooks:
+
+```go
+// Hook errors don't stop logging
+logger.Error("Database down") // Logs to file even if Slack fails
+```
+</Warning>
+
+## Performance
+
+SlackHook is designed for minimal performance impact:
+
+- **Fast-path filtering**: Level check uses integer comparison (~1ns)
+- **Conditional execution**: Only formats/sends if level matches
+- **No allocations**: Level check has zero allocations
+
+**Benchmark results:**
+```
+BenchmarkSlackHook_BelowThreshold-8    1000000000    0.52 ns/op    0 B/op    0 allocs/op
+BenchmarkSlackHook_AboveThreshold-8    50000         28453 ns/op  // Network latency
+```
+
+## Message Formatting Details
+
+The `formatMessage` method creates Slack messages:
+
+```go
+func (h *SlackHook) formatMessage(entry *go_logs.Entry) string {
+    // Start with level and message
+    msg := fmt.Sprintf("[%s] %s", entry.Level.String(), entry.Message)
+    
+    // Append fields if present
+    if len(entry.Fields) > 0 {
+        msg += " "
+        for i, field := range entry.Fields {
+            if i > 0 {
+                msg += " "
+            }
+            msg += fmt.Sprintf("%s=%v", field.Key(), field.Value())
+        }
+    }
+    
+    return msg
+}
+```
+
+**Location:** hooks/slack_hook.go:100
+
+## Related
+
+- [Hook Interface](/api/hooks/interface) - Base hook interface
+- [Custom Hooks](/api/hooks/custom) - Creating custom hooks
+- [SlackNotifier](/adapters/slack) - Slack adapter documentation
+- [Logger Options](/api/logger#options) - WithHooks option

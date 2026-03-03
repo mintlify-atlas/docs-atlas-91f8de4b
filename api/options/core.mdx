@@ -1,0 +1,269 @@
+---
+title: 'Core Options'
+description: 'Essential configuration options for go_logs logger'
+---
+
+## Overview
+
+Core options provide fundamental configuration for the logger instance, including level filtering, output destination, and formatting.
+
+## WithLevel
+
+Sets the minimum log level threshold for filtering.
+
+### Signature
+
+```go
+func WithLevel(level Level) Option
+```
+
+### Parameters
+
+- `level` (Level): The minimum log level threshold
+
+### Returns
+
+- `Option`: A configuration option that sets the logger's level threshold
+
+### Type Definition
+
+```go
+type LevelOption struct {
+    Level Level
+}
+```
+
+### Description
+
+Messages below the specified level will be filtered out and not logged. Uses syslog-style filtering where higher numeric values indicate higher severity.
+
+### Level Values
+
+| Level | Value | Description |
+|-------|-------|-------------|
+| `TraceLevel` | 10 | Extremely detailed, high-volume logging |
+| `DebugLevel` | 20 | Detailed diagnostic information |
+| `InfoLevel` | 30 | General informational messages (default) |
+| `WarnLevel` | 40 | Warning messages |
+| `ErrorLevel` | 50 | Error events |
+| `FatalLevel` | 60 | Critical errors that terminate the app |
+| `SilentLevel` | 0 | Disables all logging |
+
+### Examples
+
+```go
+// Set logger to only show warnings and errors
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.WarnLevel),
+)
+
+// Debug and trace logs will be filtered out
+logger.Debug("This won't be logged")
+logger.Warn("This will be logged")
+logger.Error("This will be logged")
+```
+
+```go
+// Enable all logging including trace
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.TraceLevel),
+)
+```
+
+```go
+// Disable all logging
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.SilentLevel),
+)
+```
+
+---
+
+## WithOutput
+
+Sets the output destination for log entries.
+
+### Signature
+
+```go
+func WithOutput(w io.Writer) Option
+```
+
+### Parameters
+
+- `w` (io.Writer): The output destination for log messages
+
+### Returns
+
+- `Option`: A configuration option that sets the logger's output writer
+
+### Type Definition
+
+```go
+type OutputOption struct {
+    Output io.Writer
+}
+```
+
+### Description
+
+Configures where log messages will be written. Accepts any `io.Writer` implementation, including files, stdout, stderr, or custom writers.
+
+### Examples
+
+```go
+// Write to stdout
+logger, _ := go_logs.New(
+    go_logs.WithOutput(os.Stdout),
+)
+```
+
+```go
+// Write to a file
+file, _ := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+defer file.Close()
+
+logger, _ := go_logs.New(
+    go_logs.WithOutput(file),
+)
+```
+
+```go
+// Write to stderr
+logger, _ := go_logs.New(
+    go_logs.WithOutput(os.Stderr),
+)
+```
+
+```go
+// Use a custom writer
+type CustomWriter struct{}
+
+func (w *CustomWriter) Write(p []byte) (n int, err error) {
+    // Custom write logic
+    return len(p), nil
+}
+
+logger, _ := go_logs.New(
+    go_logs.WithOutput(&CustomWriter{}),
+)
+```
+
+---
+
+## WithFormatter
+
+Sets the formatter for log entries.
+
+### Signature
+
+```go
+func WithFormatter(f Formatter) Option
+```
+
+### Parameters
+
+- `f` (Formatter): The formatter implementation to use
+
+### Returns
+
+- `Option`: A configuration option that sets the logger's formatter
+
+### Type Definition
+
+```go
+type FormatterOption struct {
+    Formatter Formatter
+}
+```
+
+### Formatter Interface
+
+```go
+type Formatter interface {
+    // Format converts a log Entry to bytes for writing to output
+    Format(entry *Entry) ([]byte, error)
+}
+```
+
+### Description
+
+Controls how log entries are formatted before being written to the output. go_logs provides two built-in formatters:
+
+- **TextFormatter**: Human-readable format with optional ANSI colors (ideal for development)
+- **JSONFormatter**: Structured JSON format (ideal for production and log aggregators)
+
+### Examples
+
+```go
+// Use text formatter for development
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewTextFormatter()),
+)
+
+// Output: [2026/03/03 10:30:00] INFO connection established host=db.example.com port=5432
+```
+
+```go
+// Use JSON formatter for production
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+)
+
+// Output: {"level":"INFO","timestamp":"2026-03-03T10:30:00Z","message":"connection established","host":"db.example.com","port":5432}
+```
+
+```go
+// Custom formatter configuration
+formatter := go_logs.NewTextFormatter()
+formatter.EnableColors = true
+formatter.EnableTimestamp = true
+
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(formatter),
+)
+```
+
+### Custom Formatter
+
+```go
+type MyFormatter struct{}
+
+func (f *MyFormatter) Format(entry *go_logs.Entry) ([]byte, error) {
+    return []byte(fmt.Sprintf("[%s] %s\n", 
+        entry.Level.String(), 
+        entry.Message,
+    )), nil
+}
+
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(&MyFormatter{}),
+)
+```
+
+---
+
+## Combined Usage
+
+```go
+// Combine multiple core options
+logger, err := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel),
+    go_logs.WithOutput(os.Stdout),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+logger.Info("Logger configured",
+    go_logs.String("format", "json"),
+    go_logs.String("level", "debug"),
+)
+```
+
+## Related
+
+- [Level Reference](/api/core/level) - Detailed information about log levels
+- [Formatter Reference](/api/core/formatter) - Formatter implementations
+- [Output Options](/api/options/output) - Advanced output configuration

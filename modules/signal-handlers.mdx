@@ -1,0 +1,484 @@
+---
+title: Signal Handlers
+description: SIGHUP handler for external log rotation with logrotate
+---
+
+The `signal` module provides signal handling for log rotation, enabling seamless integration with external rotation tools like `logrotate`. This is essential for production systems where log rotation is managed at the system level.
+
+## Features
+
+- **SIGHUP handler** for log rotation
+- **Configurable signals** - Listen to custom signals
+- **Thread-safe operation**
+- **Graceful shutdown**
+- Integration with `RotatingFileWriter`
+
+## Installation
+
+```bash
+go get github.com/drossan/go_logs/signal
+```
+
+## Basic Usage
+
+```go
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/signal"
+)
+
+func main() {
+    // Create rotating file writer
+    writer, _ := go_logs.NewRotatingFileWriter("/var/log/app.log", 100, 5)
+    
+    // Create logger with the writer
+    logger, _ := go_logs.New(go_logs.WithOutput(writer))
+
+    // Setup SIGHUP handler
+    handler := signal.NewSIGHUPHandler(signal.WrapRotator(writer))
+    handler.Register()
+    defer handler.Stop()
+
+    // Application continues normally
+    logger.Info("Server started")
+    
+    // Logs will automatically rotate when SIGHUP is received
+    // (typically sent by logrotate)
+}
+```
+
+## How It Works
+
+When your application receives a SIGHUP signal (usually from `logrotate`), the handler:
+
+1. Receives the signal
+2. Calls the `Rotate()` method on the writer
+3. Closes the current log file
+4. Opens a new log file
+5. Continues logging to the new file
+
+## Integration with logrotate
+
+### Application Setup
+
+```go
+package main
+
+import (
+    "os"
+    "os/signal"
+    "syscall"
+
+    "github.com/drossan/go_logs"
+    logsignal "github.com/drossan/go_logs/signal"
+)
+
+func main() {
+    // Create rotating writer
+    writer, err := go_logs.NewRotatingFileWriter("/var/log/myapp/app.log", 100, 5)
+    if err != nil {
+        panic(err)
+    }
+
+    // Create logger
+    logger, _ := go_logs.New(
+        go_logs.WithOutput(writer),
+        go_logs.WithLevel(go_logs.InfoLevel),
+    )
+
+    // Setup SIGHUP handler for external rotation
+    rotateHandler := logsignal.NewSIGHUPHandler(logsignal.WrapRotator(writer))
+    rotateHandler.Register()
+    defer rotateHandler.Stop()
+
+    // Setup graceful shutdown
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+    logger.Info("Application started")
+
+    // Application logic...
+    <-sigChan
+
+    logger.Info("Shutting down gracefully")
+}
+```
+
+### logrotate Configuration
+
+Create `/etc/logrotate.d/myapp`:
+
+```text
+/var/log/myapp/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 myapp myapp
+    sharedscripts
+    postrotate
+        # Send SIGHUP to application
+        killall -SIGHUP myapp || true
+    endscript
+}
+```
+
+**Configuration breakdown:**
+- `daily` - Rotate logs daily
+- `rotate 14` - Keep 14 days of logs
+- `compress` - Compress old logs with gzip
+- `delaycompress` - Don't compress the most recent rotated file
+- `create 0640 myapp myapp` - Create new log file with permissions
+- `postrotate` - Send SIGHUP after rotation
+
+### Testing logrotate
+
+```bash
+# Test configuration
+sudo logrotate -d /etc/logrotate.d/myapp
+
+# Force rotation (for testing)
+sudo logrotate -f /etc/logrotate.d/myapp
+
+# Verify
+ls -la /var/log/myapp/
+```
+
+## API Reference
+
+### Rotator Interface
+
+```go
+type Rotator interface {
+    Rotate() error
+}
+```
+
+Any type implementing this interface can be used with the signal handler.
+
+### NewSIGHUPHandler
+
+```go
+// Create handler for SIGHUP
+func NewSIGHUPHandler(rotator Rotator, additionalSignals ...os.Signal) *SIGHUPHandler
+```
+
+**Example with additional signals:**
+```go
+import "syscall"
+
+// Rotate on both SIGHUP and SIGUSR1
+handler := signal.NewSIGHUPHandler(
+    signal.WrapRotator(writer),
+    syscall.SIGUSR1,
+)
+```
+
+### WrapRotator
+
+```go
+// Wrap RotatingFileWriter to implement Rotator interface
+func WrapRotator(writer *go_logs.RotatingFileWriter) Rotator
+```
+
+### Handler Methods
+
+```go
+// Register starts listening for signals (non-blocking)
+func (h *SIGHUPHandler) Register()
+
+// Stop stops the signal handler
+func (h *SIGHUPHandler) Stop()
+```
+
+## Custom Rotator
+
+Implement your own rotation logic:
+
+```go
+type MyRotator struct {
+    filename string
+    mu       sync.Mutex
+}
+
+func (r *MyRotator) Rotate() error {
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    
+    // Custom rotation logic
+    timestamp := time.Now().Format("20060102-150405")
+    newName := fmt.Sprintf("%s.%s", r.filename, timestamp)
+    
+    return os.Rename(r.filename, newName)
+}
+
+// Use with signal handler
+rotator := &MyRotator{filename: "/var/log/app.log"}
+handler := signal.NewSIGHUPHandler(rotator)
+handler.Register()
+```
+
+## Manual Rotation Trigger
+
+### From Command Line
+
+```bash
+# Find process ID
+pgrep myapp
+
+# Send SIGHUP
+kill -HUP <pid>
+
+# Or by name
+killall -HUP myapp
+```
+
+### From Go Code
+
+```go
+import (
+    "os"
+    "syscall"
+)
+
+// Trigger rotation programmatically
+func triggerRotation(pid int) error {
+    process, err := os.FindProcess(pid)
+    if err != nil {
+        return err
+    }
+    return process.Signal(syscall.SIGHUP)
+}
+```
+
+## Docker/Kubernetes
+
+### Docker
+
+```dockerfile
+FROM golang:1.21 AS builder
+WORKDIR /app
+COPY . .
+RUN go build -o myapp
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y logrotate cron
+
+COPY --from=builder /app/myapp /usr/local/bin/
+COPY logrotate.conf /etc/logrotate.d/myapp
+
+# Create log directory
+RUN mkdir -p /var/log/myapp && \
+    chown myapp:myapp /var/log/myapp
+
+USER myapp
+CMD ["/usr/local/bin/myapp"]
+```
+
+### Kubernetes with Sidecar
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp
+spec:
+  containers:
+  # Main application
+  - name: app
+    image: myapp:latest
+    volumeMounts:
+    - name: logs
+      mountPath: /var/log/myapp
+  
+  # Logrotate sidecar
+  - name: logrotate
+    image: debian:bookworm-slim
+    command:
+    - /bin/bash
+    - -c
+    - |
+      apt-get update && apt-get install -y logrotate cron
+      cat > /etc/logrotate.d/app <<EOF
+      /var/log/myapp/*.log {
+        hourly
+        rotate 24
+        compress
+        delaycompress
+        missingok
+        notifempty
+        postrotate
+          killall -HUP myapp || true
+        endscript
+      }
+      EOF
+      # Run logrotate every hour
+      while true; do
+        logrotate /etc/logrotate.d/app
+        sleep 3600
+      done
+    volumeMounts:
+    - name: logs
+      mountPath: /var/log/myapp
+  
+  volumes:
+  - name: logs
+    emptyDir: {}
+```
+
+## Advanced Example with Logging
+
+```go
+package main
+
+import (
+    "os"
+    "os/signal"
+    "syscall"
+
+    "github.com/drossan/go_logs"
+    logsignal "github.com/drossan/go_logs/signal"
+)
+
+func main() {
+    // Create rotating writer
+    writer, err := go_logs.NewRotatingFileWriter("/var/log/myapp/app.log", 100, 5)
+    if err != nil {
+        panic(err)
+    }
+
+    // Create logger
+    logger, _ := go_logs.New(
+        go_logs.WithOutput(writer),
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    )
+
+    // Setup SIGHUP handler with logger for debugging
+    rotateHandler := logsignal.NewSIGHUPHandler(
+        logsignal.WrapRotator(writer),
+    )
+    
+    // Configure handler to log rotation events
+    // (handler will use the logger internally if set)
+    rotateHandler.Register()
+    defer rotateHandler.Stop()
+
+    logger.Info("Application started",
+        go_logs.String("log_file", "/var/log/myapp/app.log"),
+        go_logs.Int("max_size_mb", 100),
+    )
+
+    // Setup graceful shutdown
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+    // Simulate application work
+    go func() {
+        for {
+            logger.Info("Heartbeat")
+            time.Sleep(10 * time.Second)
+        }
+    }()
+
+    // Wait for shutdown signal
+    <-sigChan
+    logger.Info("Shutdown signal received")
+    
+    // Cleanup
+    logger.Sync()
+}
+```
+
+## Best Practices
+
+### Use with RotatingFileWriter
+
+```go
+// Good: Combine internal size-based rotation with external signal rotation
+writer, _ := go_logs.NewRotatingFileWriter("/var/log/app.log", 100, 5)
+logger, _ := go_logs.New(go_logs.WithOutput(writer))
+
+// Internal rotation when file reaches 100MB
+// External rotation when SIGHUP received
+handler := signal.NewSIGHUPHandler(signal.WrapRotator(writer))
+handler.Register()
+```
+
+### Graceful Shutdown
+
+```go
+// Always stop the handler on shutdown
+handler := signal.NewSIGHUPHandler(signal.WrapRotator(writer))
+handler.Register()
+defer handler.Stop() // Cleanup signal handler
+```
+
+### Error Handling
+
+```go
+// Custom rotator with error logging
+type LoggingRotator struct {
+    writer *go_logs.RotatingFileWriter
+    logger go_logs.Logger
+}
+
+func (r *LoggingRotator) Rotate() error {
+    r.logger.Info("Starting log rotation")
+    
+    if err := r.writer.Rotate(); err != nil {
+        r.logger.Error("Rotation failed", go_logs.Err(err))
+        return err
+    }
+    
+    r.logger.Info("Log rotation completed")
+    return nil
+}
+```
+
+## Troubleshooting
+
+### SIGHUP Not Working
+
+```bash
+# Check if handler is registered
+ps aux | grep myapp
+
+# Send test signal
+kill -HUP <pid>
+
+# Check logs for rotation message
+tail -f /var/log/myapp/app.log
+```
+
+### Permissions Issues
+
+```bash
+# Ensure log directory is writable
+ls -la /var/log/myapp/
+
+# Fix permissions
+sudo chown -R myapp:myapp /var/log/myapp/
+sudo chmod 755 /var/log/myapp/
+```
+
+### logrotate Not Sending Signal
+
+```bash
+# Check logrotate status
+sudo cat /var/lib/logrotate/status
+
+# Test with debug mode
+sudo logrotate -d -f /etc/logrotate.d/myapp
+
+# Check for errors
+sudo grep logrotate /var/log/syslog
+```
+
+## See Also
+
+- [Rotating Writer](/advanced/rotating-file) - Internal size-based rotation
+- [Configuration](/core/configuration) - Logger setup
+- [Production Setup](/guides/production) - Deployment best practices

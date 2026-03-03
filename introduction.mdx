@@ -1,0 +1,120 @@
+---
+title: Introduction
+description: Modern structured logging library for Go with typed fields, multiple formatters, child loggers, and extensible hooks
+---
+
+go_logs is a powerful structured logging library for Go that provides comprehensive logging capabilities for modern applications. It offers both a legacy API (v2) for backward compatibility and a modern API (v3) with structured logging, typed fields, and advanced features.
+
+## Overview
+
+go_logs v3 brings modern structured logging to Go applications while maintaining 100% backward compatibility with v2. Whether you're building microservices, APIs, or traditional applications, go_logs provides the tools you need for effective logging.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Structured logging" icon="code">
+    Log with typed fields using `String()`, `Int()`, `Err()`, and more. Fields are zero-allocation for high performance.
+  </Card>
+  
+  <Card title="Child loggers" icon="sitemap">
+    Create child loggers with pre-populated fields that automatically propagate to all log entries.
+  </Card>
+  
+  <Card title="Multiple formatters" icon="palette">
+    Choose between TextFormatter for development with colors or JSONFormatter for production log aggregators.
+  </Card>
+  
+  <Card title="Context propagation" icon="link">
+    Automatically extract and include trace_id and span_id from context for distributed tracing.
+  </Card>
+  
+  <Card title="Extensible hooks" icon="plug">
+    Send logs to multiple destinations like Slack, Sentry, OpenTelemetry, or syslog using the hook system.
+  </Card>
+  
+  <Card title="File rotation" icon="rotate">
+    Built-in rotating file writer with size-based and time-based rotation, no external dependencies.
+  </Card>
+  
+  <Card title="Security features" icon="shield">
+    Automatic redaction of sensitive fields like passwords, tokens, and API keys.
+  </Card>
+  
+  <Card title="Thread-safe" icon="lock">
+    All operations are thread-safe with mutex protection, perfect for concurrent applications.
+  </Card>
+</CardGroup>
+
+## Log levels
+
+go_logs uses syslog-style log levels with numeric values:
+
+| Level | Value | Description |
+|-------|-------|-------------|
+| Trace | 10 | Detailed execution traces |
+| Debug | 20 | Debugging information |
+| Info | 30 | Informational events |
+| Warn | 40 | Warning messages |
+| Error | 50 | Error events |
+| Fatal | 60 | Fatal errors (terminates program) |
+| Silent | 0 | Disables all logging |
+
+## Formatters
+
+### TextFormatter (development)
+
+Human-readable output with ANSI colors for terminal:
+
+```
+[2026/02/28 17:30:00] INFO connection established host=db.example.com port=5432
+```
+
+### JSONFormatter (production)
+
+Structured JSON for log aggregators like ELK, Loki, and Datadog:
+
+```json
+{"timestamp":"2026-02-28T17:30:00Z","level":"INFO","message":"connection established","fields":{"host":"db.example.com","port":5432}}
+```
+
+## Quick links
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Get started by installing go_logs in your project
+  </Card>
+  
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Learn the basics with a working example
+  </Card>
+  
+  <Card title="API reference" icon="book" href="/api-reference">
+    Explore the complete API documentation
+  </Card>
+  
+  <Card title="Examples" icon="code" href="/examples">
+    See real-world examples and use cases
+  </Card>
+</CardGroup>
+
+## Use cases
+
+- **Microservices**: Track requests across services with trace IDs and child loggers
+- **APIs**: Log structured data about requests, responses, and errors
+- **Background jobs**: Monitor job execution with detailed logging
+- **Production systems**: Send logs to aggregators using JSONFormatter
+- **Development**: Debug with colored console output using TextFormatter
+
+## Performance
+
+go_logs is designed for high performance with minimal overhead:
+
+- Fast-path filtering: 0.32 ns/op
+- Field creation: 0.34 ns/op with zero allocations
+- TextFormatter: 220.6 ns/op
+- JSONFormatter: 249.3 ns/op
+- RotatingFileWriter: 16M messages/sec
+
+<Note>
+go_logs v3 is 100% backward compatible with v2. You can upgrade your dependency without changing any existing code.
+</Note>

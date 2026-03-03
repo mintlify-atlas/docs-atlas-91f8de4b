@@ -1,0 +1,384 @@
+---
+title: 'JSONFormatter'
+description: 'Structured JSON log formatter for production and log aggregators'
+---
+
+## Overview
+
+`JSONFormatter` formats log entries as JSON for log aggregators and production environments. Ideal for use with ELK Stack, Loki, Datadog, and other log analysis systems.
+
+**Output format (single line):**
+```json
+{"timestamp":"2026-02-28T17:30:00Z","level":"INFO","message":"connection established","fields":{"host":"db.example.com","port":5432}}
+```
+
+## Type Definition
+
+```go
+type JSONFormatter struct {
+    config FormatterConfig
+}
+```
+
+## Constructor Functions
+
+### NewJSONFormatter
+
+Creates a new JSONFormatter with default configuration.
+
+```go
+func NewJSONFormatter() *JSONFormatter
+```
+
+**Default configuration:**
+- `EnableTimestamp`: true
+- `EnableLevel`: true
+- `TimestampFormat`: RFC3339 (ISO 8601)
+
+**Example:**
+```go
+logger := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+)
+```
+
+### NewJSONFormatterWithConfig
+
+Creates a new JSONFormatter with custom configuration.
+
+```go
+func NewJSONFormatterWithConfig(config FormatterConfig) *JSONFormatter
+```
+
+**Parameters:**
+- `config` - FormatterConfig with custom settings
+
+**Example:**
+```go
+import "time"
+
+config := go_logs.FormatterConfig{
+    EnableTimestamp: true,
+    EnableLevel:     true,
+    TimestampFormat: time.RFC3339Nano, // Higher precision
+}
+formatter := go_logs.NewJSONFormatterWithConfig(config)
+```
+
+## Methods
+
+### Format
+
+Converts a log Entry to JSON bytes.
+
+```go
+func (f *JSONFormatter) Format(entry *Entry) ([]byte, error)
+```
+
+**Parameters:**
+- `entry` - The log entry to format
+
+**Returns:**
+- `[]byte` - JSON bytes with trailing newline
+- `error` - Error if JSON marshaling fails
+
+**Location:** json_formatter.go:64
+
+### SetEnableTimestamp
+
+Enables or disables timestamp output.
+
+```go
+func (f *JSONFormatter) SetEnableTimestamp(enabled bool)
+```
+
+**Parameters:**
+- `enabled` - true to include timestamps, false to omit
+
+**Location:** json_formatter.go:121
+
+### SetEnableLevel
+
+Enables or disables level output.
+
+```go
+func (f *JSONFormatter) SetEnableLevel(enabled bool)
+```
+
+**Parameters:**
+- `enabled` - true to include level, false to omit
+
+**Location:** json_formatter.go:126
+
+### SetTimestampFormat
+
+Sets the timestamp format string.
+
+```go
+func (f *JSONFormatter) SetTimestampFormat(format string)
+```
+
+**Parameters:**
+- `format` - Go time format string (default: RFC3339)
+
+**Reference:** [Go time format constants](https://pkg.go.dev/time#pkg-constants)
+
+**Example:**
+```go
+formatter.SetTimestampFormat(time.RFC3339Nano)
+// Output: "timestamp":"2026-02-28T17:30:00.123456789Z"
+```
+
+**Location:** json_formatter.go:133
+
+## JSONLogEntry Structure
+
+Internal JSON structure used for marshaling.
+
+```go
+type JSONLogEntry struct {
+    Timestamp  string                 `json:"timestamp,omitempty"`
+    Level      string                 `json:"level,omitempty"`
+    Message    string                 `json:"message"`
+    Fields     map[string]interface{} `json:"fields,omitempty"`
+    Caller     string                 `json:"caller,omitempty"`
+    CallerFunc string                 `json:"caller_func,omitempty"`
+    StackTrace string                 `json:"stack_trace,omitempty"`
+}
+```
+
+**Field descriptions:**
+- `Timestamp` - ISO 8601 timestamp (omitted if disabled)
+- `Level` - Log level as uppercase string (e.g., "INFO", "ERROR")
+- `Message` - The log message
+- `Fields` - Nested object with structured fields (omitted if empty)
+- `Caller` - Source file and line (e.g., "main.go:42")
+- `CallerFunc` - Function name (e.g., "main.processRequest")
+- `StackTrace` - Stack trace for errors (omitted if empty)
+
+## Field Type Handling
+
+JSONFormatter handles different field types appropriately:
+
+- **Strings**: Properly escaped JSON strings
+- **Numbers**: Native JSON numbers (int, float64)
+- **Booleans**: JSON booleans (true/false)
+- **Errors**: Converted to error message string using `.Error()`
+- **Nil errors**: Represented as JSON null
+- **Other types**: Marshaled according to encoding/json rules
+
+## Usage Examples
+
+### Basic Production Setup
+
+```go
+import "github.com/drossan/go_logs"
+
+logger := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithLevel(go_logs.InfoLevel),
+)
+
+logger.Info("Server started",
+    go_logs.Int("port", 8080),
+    go_logs.String("env", "production"),
+)
+// Output: {"timestamp":"2026-02-28T17:30:00Z","level":"INFO","message":"Server started","fields":{"port":8080,"env":"production"}}
+```
+
+### Error Logging with Stack Traces
+
+```go
+err := someOperation()
+if err != nil {
+    logger.Error("Operation failed",
+        go_logs.Err(err),
+        go_logs.String("operation", "database query"),
+        go_logs.String("table", "users"),
+    )
+}
+// Output: {"timestamp":"2026-02-28T17:30:00Z","level":"ERROR","message":"Operation failed","fields":{"error":"connection timeout","operation":"database query","table":"users"}}
+```
+
+### Custom Timestamp Format
+
+```go
+import "time"
+
+formatter := go_logs.NewJSONFormatter()
+formatter.SetTimestampFormat(time.RFC3339Nano) // Nanosecond precision
+
+logger := go_logs.New(go_logs.WithFormatter(formatter))
+
+logger.Info("High precision timestamp")
+// Output: {"timestamp":"2026-02-28T17:30:00.123456789Z","level":"INFO","message":"High precision timestamp"}
+```
+
+### Minimal JSON (No Timestamp/Level)
+
+```go
+config := go_logs.FormatterConfig{
+    EnableTimestamp: false,
+    EnableLevel:     false,
+}
+
+formatter := go_logs.NewJSONFormatterWithConfig(config)
+logger := go_logs.New(go_logs.WithFormatter(formatter))
+
+logger.Info("Minimal output",
+    go_logs.String("event", "user_login"),
+)
+// Output: {"message":"Minimal output","fields":{"event":"user_login"}}
+```
+
+### With Caller Information
+
+```go
+logger := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithCaller(true),
+)
+
+logger.Info("Processing request")
+// Output: {"timestamp":"2026-02-28T17:30:00Z","level":"INFO","message":"Processing request","caller":"main.go:42","caller_func":"main.processRequest"}
+```
+
+## Integration Examples
+
+### ELK Stack (Elasticsearch + Logstash + Kibana)
+
+```go
+import (
+    "github.com/drossan/go_logs"
+    "os"
+)
+
+logFile, _ := os.OpenFile("/var/log/app.json", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+
+logger := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithOutput(logFile),
+)
+
+// Logstash can parse JSON logs directly
+logger.Info("Request processed",
+    go_logs.String("request_id", "abc-123"),
+    go_logs.Int("status_code", 200),
+    go_logs.Float64("duration_ms", 45.7),
+)
+```
+
+### Datadog
+
+```go
+logger := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+)
+
+// Add Datadog-specific fields
+logger.Info("Service health check",
+    go_logs.String("service", "api"),
+    go_logs.String("env", "production"),
+    go_logs.String("version", "1.2.3"),
+)
+```
+
+### Grafana Loki
+
+```go
+import "time"
+
+// Loki prefers RFC3339Nano for precise timestamps
+config := go_logs.FormatterConfig{
+    EnableTimestamp: true,
+    EnableLevel:     true,
+    TimestampFormat: time.RFC3339Nano,
+}
+
+logger := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewJSONFormatterWithConfig(config)),
+)
+```
+
+## Best Practices
+
+<Tip>
+**Production Environments**
+
+Always use JSONFormatter in production for:
+- Machine-readable logs
+- Easy parsing by log aggregators
+- Structured querying and filtering
+- Better integration with monitoring tools
+</Tip>
+
+<Tip>
+**Timestamp Format**
+
+Use RFC3339 (default) for maximum compatibility:
+```go
+formatter := go_logs.NewJSONFormatter()
+// TimestampFormat is already RFC3339 by default
+```
+
+For higher precision, use RFC3339Nano:
+```go
+formatter.SetTimestampFormat(time.RFC3339Nano)
+```
+</Tip>
+
+<Warning>
+**Error Handling**
+
+JSONFormatter can return errors if marshaling fails. Always handle potential errors:
+
+```go
+data, err := formatter.Format(entry)
+if err != nil {
+    // Fallback handling
+    fmt.Fprintf(os.Stderr, "Failed to format log: %v\n", err)
+}
+```
+</Warning>
+
+## Performance
+
+JSONFormatter is optimized for production use:
+
+- **Fast marshaling**: ~249.3 ns/op
+- **Standard library**: Uses encoding/json (no dependencies)
+- **Single allocation**: Creates one map for fields
+- **Proper escaping**: Handles special characters correctly
+
+## Output Format Details
+
+### With All Fields
+
+```json
+{
+  "timestamp": "2026-02-28T17:30:00Z",
+  "level": "ERROR",
+  "message": "Database connection failed",
+  "fields": {
+    "error": "connection refused",
+    "host": "db.example.com",
+    "port": 5432,
+    "retry_count": 3
+  },
+  "caller": "database.go:156",
+  "caller_func": "database.Connect",
+  "stack_trace": "goroutine 1 [running]:\n..."
+}
+```
+
+### Minimal Format
+
+```json
+{"message":"Simple log message"}
+```
+
+## Related
+
+- [TextFormatter](/api/formatters/text) - Human-readable text formatter
+- [Logger API](/api/logger) - Main logger interface
+- [Fields](/api/fields) - Structured field types

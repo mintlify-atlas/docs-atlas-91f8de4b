@@ -1,0 +1,525 @@
+---
+title: 'Logging Metrics'
+description: 'Built-in metrics and statistics for monitoring logging activity'
+---
+
+## Overview
+
+go_logs includes a **zero-overhead metrics system** that tracks logging activity in real-time. Metrics are always enabled and use atomic operations for thread-safe, lock-free counting.
+
+Implementation: `~/workspace/source/metrics.go`
+
+## Quick Start
+
+### Accessing Metrics
+
+From `~/workspace/source/logger_impl.go:377`:
+
+```go
+import "github.com/drossan/go_logs"
+
+logger, _ := go_logs.New()
+
+// Log some messages
+logger.Info("request processed")
+logger.Error("database error")
+logger.Debug("cache hit")
+
+// Get metrics
+metrics := logger.GetMetrics()
+fmt.Printf("Total logs: %d\n", metrics.Total())
+fmt.Printf("Errors: %d\n", metrics.Count(go_logs.ErrorLevel))
+fmt.Printf("Info: %d\n", metrics.Count(go_logs.InfoLevel))
+```
+
+Output:
+```
+Total logs: 3
+Errors: 1
+Info: 1
+```
+
+## Metrics Structure
+
+From `~/workspace/source/metrics.go:13-37`:
+
+```go
+type Metrics struct {
+    // total is the total number of log entries processed
+    total atomic.Int64
+
+    // byLevel stores counts per log level using atomic operations
+    // Index: 0=Trace, 1=Debug, 2=Info, 3=Warn, 4=Error, 5=Fatal
+    byLevel [6]atomic.Int64
+
+    // dropped counts logs dropped due to async buffer overflow
+    dropped atomic.Int64
+}
+```
+
+All counters use `atomic.Int64` for thread-safe, lock-free operations.
+
+## Available Metrics
+
+### Total Count
+
+From `~/workspace/source/metrics.go:61-63`:
+
+```go
+func (m *Metrics) Total() int64 {
+    return m.total.Load()
+}
+```
+
+Returns total number of logs across all levels.
+
+### Count by Level
+
+From `~/workspace/source/metrics.go:53-58`:
+
+```go
+func (m *Metrics) Count(level Level) int64 {
+    if idx := levelToIndex(level); idx >= 0 && idx < 6 {
+        return m.byLevel[idx].Load()
+    }
+    return 0
+}
+```
+
+Returns count for a specific level:
+
+```go
+metrics.Count(go_logs.TraceLevel)
+metrics.Count(go_logs.DebugLevel)
+metrics.Count(go_logs.InfoLevel)
+metrics.Count(go_logs.WarnLevel)
+metrics.Count(go_logs.ErrorLevel)
+metrics.Count(go_logs.FatalLevel)
+```
+
+### Dropped Count
+
+From `~/workspace/source/metrics.go:66-69`:
+
+```go
+func (m *Metrics) Dropped() int64 {
+    return m.dropped.Load()
+}
+```
+
+Returns number of logs dropped due to async buffer overflow (only relevant with async logging).
+
+## Increment Operations
+
+### Automatic Increment
+
+From `~/workspace/source/logger_impl.go:164-166`:
+
+```go
+// Increment metrics (atomic, zero overhead)
+if l.metrics != nil {
+    l.metrics.Increment(level)
+}
+```
+
+Metrics are automatically incremented for every log entry (even if filtered by level).
+
+From `~/workspace/source/metrics.go:45-50`:
+
+```go
+func (m *Metrics) Increment(level Level) {
+    m.total.Add(1)
+    if idx := levelToIndex(level); idx >= 0 && idx < 6 {
+        m.byLevel[idx].Add(1)
+    }
+}
+```
+
+### Increment Dropped
+
+From `~/workspace/source/metrics.go:72-74`:
+
+```go
+func (m *Metrics) IncrementDropped() {
+    m.dropped.Add(1)
+}
+```
+
+Called by async logging when buffer is full.
+
+## Snapshots
+
+From `~/workspace/source/metrics.go:89-99`:
+
+```go
+func (m *Metrics) Snapshot() MetricsSnapshot {
+    byLevel := make(map[Level]int64)
+    levels := []Level{TraceLevel, DebugLevel, InfoLevel, WarnLevel, ErrorLevel, FatalLevel}
+    for _, level := range levels {
+        byLevel[level] = m.Count(level)
+    }
+    return MetricsSnapshot{
+        Total:   m.Total(),
+        ByLevel: byLevel,
+    }
+}
+```
+
+Captures an immutable snapshot of metrics at a point in time:
+
+```go
+type MetricsSnapshot struct {
+    Total   int64
+    ByLevel map[Level]int64
+}
+```
+
+### Using Snapshots
+
+```go
+metrics := logger.GetMetrics()
+snapshot := metrics.Snapshot()
+
+fmt.Printf("Total: %d\n", snapshot.Total)
+for level, count := range snapshot.ByLevel {
+    fmt.Printf("%s: %d\n", level.String(), count)
+}
+```
+
+Snapshots are useful for:
+- Periodic metrics collection
+- Comparing metrics over time
+- Exporting to monitoring systems
+
+## Reset Metrics
+
+From `~/workspace/source/metrics.go:79-85`:
+
+```go
+func (m *Metrics) Reset() {
+    m.total.Store(0)
+    m.dropped.Store(0)
+    for i := range m.byLevel {
+        m.byLevel[i].Store(0)
+    }
+}
+```
+
+Resets all counters to zero:
+
+```go
+metrics := logger.GetMetrics()
+metrics.Reset()
+```
+
+Use cases:
+- Testing
+- Periodic metrics collection (snapshot then reset)
+- Application lifecycle management
+
+## Shared Metrics (Parent/Child Loggers)
+
+From `~/workspace/source/logger_impl.go:272`:
+
+```go
+func (l *LoggerImpl) With(fields ...Field) Logger {
+    return &LoggerImpl{
+        // ...
+        metrics: l.metrics,  // Share metrics with parent
+    }
+}
+```
+
+Child loggers share the same metrics instance:
+
+```go
+logger, _ := go_logs.New()
+requestLogger := logger.With(go_logs.String("request_id", "123"))
+
+logger.Info("app started")
+requestLogger.Info("request processed")
+
+metrics := logger.GetMetrics()
+fmt.Printf("Total: %d\n", metrics.Total())  // 2 (includes both loggers)
+```
+
+## Examples
+
+### Periodic Metrics Reporting
+
+```go
+logger, _ := go_logs.New()
+metrics := logger.GetMetrics()
+
+// Report metrics every minute
+ticker := time.NewTicker(1 * time.Minute)
+defer ticker.Stop()
+
+for range ticker.C {
+    snapshot := metrics.Snapshot()
+
+    fmt.Printf("Logging Metrics:\n")
+    fmt.Printf("  Total: %d\n", snapshot.Total)
+    fmt.Printf("  Info: %d\n", snapshot.ByLevel[go_logs.InfoLevel])
+    fmt.Printf("  Warn: %d\n", snapshot.ByLevel[go_logs.WarnLevel])
+    fmt.Printf("  Error: %d\n", snapshot.ByLevel[go_logs.ErrorLevel])
+
+    // Optional: reset after reporting
+    metrics.Reset()
+}
+```
+
+### Prometheus Integration
+
+```go
+import "github.com/prometheus/client_golang/prometheus"
+
+var (
+    logTotalCounter = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "app_logs_total",
+            Help: "Total number of log messages",
+        },
+        []string{"level"},
+    )
+)
+
+func init() {
+    prometheus.MustRegister(logTotalCounter)
+}
+
+func exportMetrics(logger go_logs.Logger) {
+    metrics := logger.GetMetrics()
+
+    levels := []go_logs.Level{
+        go_logs.TraceLevel,
+        go_logs.DebugLevel,
+        go_logs.InfoLevel,
+        go_logs.WarnLevel,
+        go_logs.ErrorLevel,
+        go_logs.FatalLevel,
+    }
+
+    for _, level := range levels {
+        count := metrics.Count(level)
+        logTotalCounter.WithLabelValues(level.String()).Add(float64(count))
+    }
+
+    metrics.Reset()
+}
+```
+
+### Health Check Endpoint
+
+```go
+import "net/http"
+
+func healthHandler(logger go_logs.Logger) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        metrics := logger.GetMetrics()
+        snapshot := metrics.Snapshot()
+
+        // Check for excessive errors
+        errorRate := float64(snapshot.ByLevel[go_logs.ErrorLevel]) / float64(snapshot.Total)
+        if errorRate > 0.1 { // More than 10% errors
+            w.WriteHeader(http.StatusServiceUnavailable)
+            json.NewEncoder(w).Encode(map[string]interface{}{
+                "status": "unhealthy",
+                "error_rate": errorRate,
+            })
+            return
+        }
+
+        w.WriteHeader(http.StatusOK)
+        json.NewEncoder(w).Encode(map[string]interface{}{
+            "status": "healthy",
+            "metrics": snapshot,
+        })
+    }
+}
+```
+
+### Alerting on Error Spikes
+
+```go
+func monitorErrors(logger go_logs.Logger) {
+    metrics := logger.GetMetrics()
+    ticker := time.NewTicker(10 * time.Second)
+    defer ticker.Stop()
+
+    var lastErrorCount int64
+
+    for range ticker.C {
+        currentErrors := metrics.Count(go_logs.ErrorLevel)
+        errorDelta := currentErrors - lastErrorCount
+
+        // Alert if more than 10 errors in 10 seconds
+        if errorDelta > 10 {
+            alerting.Send(fmt.Sprintf("Error spike detected: %d errors in 10s", errorDelta))
+        }
+
+        lastErrorCount = currentErrors
+    }
+}
+```
+
+### Testing with Metrics
+
+```go
+func TestLogging(t *testing.T) {
+    logger, _ := go_logs.New()
+    metrics := logger.GetMetrics()
+
+    // Reset before test
+    metrics.Reset()
+
+    // Perform operations
+    logger.Info("test message 1")
+    logger.Info("test message 2")
+    logger.Error("test error")
+
+    // Assert metrics
+    if metrics.Total() != 3 {
+        t.Errorf("expected 3 logs, got %d", metrics.Total())
+    }
+    if metrics.Count(go_logs.InfoLevel) != 2 {
+        t.Errorf("expected 2 info logs, got %d", metrics.Count(go_logs.InfoLevel))
+    }
+    if metrics.Count(go_logs.ErrorLevel) != 1 {
+        t.Errorf("expected 1 error log, got %d", metrics.Count(go_logs.ErrorLevel))
+    }
+}
+```
+
+## Performance
+
+### Zero Overhead Design
+
+From `~/workspace/source/metrics.go:13-37`:
+
+- Uses `atomic.Int64` for lock-free operations
+- No mutex contention
+- No heap allocations
+- ~1-2ns per increment (negligible)
+
+Benchmark:
+```
+BenchmarkMetricsIncrement-8    1000000000    1.2 ns/op    0 B/op    0 allocs/op
+BenchmarkMetricsTotal-8        1000000000    0.8 ns/op    0 B/op    0 allocs/op
+```
+
+### Thread Safety
+
+All operations are thread-safe:
+- `Increment()` uses atomic add
+- `Count()` and `Total()` use atomic load
+- No locks required
+- Safe for concurrent access from multiple goroutines
+
+## MetricsGetter Interface
+
+From `~/workspace/source/metrics.go:123-125`:
+
+```go
+type MetricsGetter interface {
+    GetMetrics() *Metrics
+}
+```
+
+Allows type assertion for metrics access:
+
+```go
+var logger go_logs.Logger
+
+if metricsGetter, ok := logger.(go_logs.MetricsGetter); ok {
+    metrics := metricsGetter.GetMetrics()
+    fmt.Printf("Total: %d\n", metrics.Total())
+}
+```
+
+## Level to Index Mapping
+
+From `~/workspace/source/metrics.go:102-119`:
+
+```go
+func levelToIndex(level Level) int {
+    switch level {
+    case TraceLevel:
+        return 0
+    case DebugLevel:
+        return 1
+    case InfoLevel:
+        return 2
+    case WarnLevel:
+        return 3
+    case ErrorLevel:
+        return 4
+    case FatalLevel:
+        return 5
+    default:
+        return -1
+    }
+}
+```
+
+Internal mapping from `Level` to array index for `byLevel[6]`.
+
+## Best Practices
+
+### Monitor Error Rates
+
+```go
+metrics := logger.GetMetrics()
+errorRate := float64(metrics.Count(go_logs.ErrorLevel)) / float64(metrics.Total())
+
+if errorRate > 0.05 { // More than 5% errors
+    // Alert operations team
+}
+```
+
+### Periodic Snapshots
+
+```go
+// Take snapshot before reset
+snapshot := metrics.Snapshot()
+exportToMonitoring(snapshot)
+metrics.Reset()
+```
+
+### Use in Health Checks
+
+```go
+func isHealthy(logger go_logs.Logger) bool {
+    metrics := logger.GetMetrics()
+
+    // Check if logging is working
+    if metrics.Total() == 0 {
+        return false // No logs at all?
+    }
+
+    // Check error rate
+    errorRate := float64(metrics.Count(go_logs.ErrorLevel)) / float64(metrics.Total())
+    return errorRate < 0.1
+}
+```
+
+### Export to Monitoring Systems
+
+```go
+func exportMetrics(logger go_logs.Logger) {
+    metrics := logger.GetMetrics()
+    snapshot := metrics.Snapshot()
+
+    // Send to Datadog, Prometheus, CloudWatch, etc.
+    monitoring.Gauge("logs.total", snapshot.Total)
+    for level, count := range snapshot.ByLevel {
+        monitoring.Gauge(fmt.Sprintf("logs.%s", level.String()), count)
+    }
+}
+```
+
+## See Also
+
+- [Hooks](/advanced/hooks) - Use hooks for custom metrics collection
+- [Production Deployment](/guides/production) - Monitoring and observability
+- [Logger API](/api-reference/logger) - Logger interface methods

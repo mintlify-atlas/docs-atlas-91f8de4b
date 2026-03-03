@@ -1,0 +1,501 @@
+---
+title: Backward compatibility
+description: Complete reference for v2 API compatibility in go_logs v3
+---
+
+go_logs v3 maintains **100% backward compatibility** with v2. All v2 functions continue to work without any code changes.
+
+## v2 API reference
+
+### Basic logging functions
+
+All v2 logging functions are fully supported:
+
+<ParamField path="InfoLog" type="func(message string)">
+  Logs an informational message in yellow color. Saved to file if `SAVE_LOG_FILE=1`. Sent to Slack if `NOTIFICATION_INFO_LOG=1`.
+</ParamField>
+
+<ParamField path="ErrorLog" type="func(message string)">
+  Logs an error message in red color. Saved to file if `SAVE_LOG_FILE=1`. Sent to Slack if `NOTIFICATION_ERROR_LOG=1`.
+</ParamField>
+
+<ParamField path="WarningLog" type="func(message string)">
+  Logs a warning message in yellow color. Saved to file if `SAVE_LOG_FILE=1`. Sent to Slack if `NOTIFICATION_WARNING_LOG=1`.
+</ParamField>
+
+<ParamField path="SuccessLog" type="func(message string)">
+  Logs a success message in green color. Saved to file if `SAVE_LOG_FILE=1`. Sent to Slack if `NOTIFICATION_SUCCESS_LOG=1`.
+</ParamField>
+
+<ParamField path="FatalLog" type="func(message string)">
+  Logs a fatal error message in red color with bomb emoji (💣). Saved to file if `SAVE_LOG_FILE=1`. Sent to Slack if `NOTIFICATION_FATAL_LOG=1`. **Terminates the program** with `log.Fatal()`.
+</ParamField>
+
+```go
+package main
+
+import "github.com/drossan/go_logs"
+
+func main() {
+    go_logs.InfoLog("Application started")
+    go_logs.ErrorLog("Database connection failed")
+    go_logs.WarningLog("Memory usage high")
+    go_logs.SuccessLog("Migration completed")
+    go_logs.FatalLog("Critical error - shutting down") // Exits program
+}
+```
+
+### Formatted logging functions
+
+Printf-style formatted logging with `fmt.Sprintf` syntax:
+
+<ParamField path="Infof" type="func(format string, args ...interface{})">
+  Logs a formatted informational message. Equivalent to `InfoLog(fmt.Sprintf(format, args...))`.
+</ParamField>
+
+<ParamField path="Errorf" type="func(format string, args ...interface{})">
+  Logs a formatted error message. Equivalent to `ErrorLog(fmt.Sprintf(format, args...))`.
+</ParamField>
+
+<ParamField path="Warningf" type="func(format string, args ...interface{})">
+  Logs a formatted warning message. Equivalent to `WarningLog(fmt.Sprintf(format, args...))`.
+</ParamField>
+
+<ParamField path="Successf" type="func(format string, args ...interface{})">
+  Logs a formatted success message. Equivalent to `SuccessLog(fmt.Sprintf(format, args...))`.
+</ParamField>
+
+<ParamField path="Fatalf" type="func(format string, args ...interface{})">
+  Logs a formatted fatal error and **terminates the program**.
+</ParamField>
+
+```go
+package main
+
+import "github.com/drossan/go_logs"
+
+func main() {
+    port := 8080
+    go_logs.Infof("Server started on port %d", port)
+    
+    username := "john"
+    go_logs.Successf("User %s logged in successfully", username)
+    
+    err := someOperation()
+    if err != nil {
+        go_logs.Errorf("Operation failed: %v", err)
+    }
+}
+```
+
+### Context-aware functions
+
+Functions that accept `context.Context` for distributed tracing:
+
+<Warning>
+In v2, these functions accepted context but **did not use it**. In v3, context is properly extracted for trace_id and span_id.
+</Warning>
+
+<ParamField path="InfoLogCtx" type="func(ctx context.Context, message string)">
+  Logs an informational message with context. In v3, extracts trace_id from context if present.
+</ParamField>
+
+<ParamField path="ErrorLogCtx" type="func(ctx context.Context, message string)">
+  Logs an error message with context. In v3, extracts trace_id from context if present.
+</ParamField>
+
+<ParamField path="WarningLogCtx" type="func(ctx context.Context, message string)">
+  Logs a warning message with context. In v3, extracts trace_id from context if present.
+</ParamField>
+
+<ParamField path="SuccessLogCtx" type="func(ctx context.Context, message string)">
+  Logs a success message with context. In v3, extracts trace_id from context if present.
+</ParamField>
+
+```go
+package main
+
+import (
+    "context"
+    "github.com/drossan/go_logs"
+)
+
+func handler(ctx context.Context) {
+    // v2 behavior: context ignored
+    go_logs.InfoLogCtx(ctx, "Request received")
+    
+    // v3 enhancement: if trace_id in context, it's logged
+    ctx = go_logs.WithTraceID(ctx, "trace-123")
+    go_logs.InfoLogCtx(ctx, "Request processed")
+    // Output includes: trace_id=trace-123
+}
+```
+
+### Context-aware formatted functions
+
+Combination of context support and printf-style formatting:
+
+<ParamField path="InfoLogCtxf" type="func(ctx context.Context, format string, args ...interface{})">
+  Logs a formatted informational message with context support.
+</ParamField>
+
+<ParamField path="ErrorLogCtxf" type="func(ctx context.Context, format string, args ...interface{})">
+  Logs a formatted error message with context support.
+</ParamField>
+
+<ParamField path="WarningLogCtxf" type="func(ctx context.Context, format string, args ...interface{})">
+  Logs a formatted warning message with context support.
+</ParamField>
+
+<ParamField path="SuccessLogCtxf" type="func(ctx context.Context, format string, args ...interface{})">
+  Logs a formatted success message with context support.
+</ParamField>
+
+```go
+package main
+
+import (
+    "context"
+    "github.com/drossan/go_logs"
+)
+
+func processUser(ctx context.Context, userID int, username string) {
+    ctx = go_logs.WithTraceID(ctx, "trace-456")
+    
+    go_logs.InfoLogCtxf(ctx, "Processing user %s (ID: %d)", username, userID)
+    // Output includes: trace_id=trace-456
+}
+```
+
+### Initialization functions
+
+<ParamField path="Init" type="func()">
+  Initializes the global logger by loading configuration from environment variables. Optional - logging works without calling `Init()`.
+</ParamField>
+
+<ParamField path="Close" type="func()">
+  Flushes and closes log file if file logging is enabled. Should be called with `defer` in `main()`.
+</ParamField>
+
+```go
+package main
+
+import "github.com/drossan/go_logs"
+
+func main() {
+    go_logs.Init()         // Optional - loads config from env vars
+    defer go_logs.Close()  // Flush and close files
+    
+    go_logs.InfoLog("Application started")
+}
+```
+
+## Environment variables
+
+All v2 environment variables continue to work in v3:
+
+### File logging
+
+<ParamField path="SAVE_LOG_FILE" type="string" default="0">
+  Enable file logging. Set to `1` to enable, `0` to disable.
+</ParamField>
+
+<ParamField path="LOG_FILE_NAME" type="string" default="app.log">
+  Name of the log file.
+</ParamField>
+
+<ParamField path="LOG_FILE_PATH" type="string" default=".">
+  Directory path for log file.
+</ParamField>
+
+```bash
+export SAVE_LOG_FILE=1
+export LOG_FILE_NAME=myapp.log
+export LOG_FILE_PATH=/var/log
+# Logs written to /var/log/myapp.log
+```
+
+### Slack notifications
+
+<ParamField path="NOTIFICATIONS_SLACK_ENABLED" type="string" default="0">
+  Enable Slack notifications. Set to `1` to enable.
+</ParamField>
+
+<ParamField path="SLACK_TOKEN" type="string">
+  Slack bot token (starts with `xoxb-`).
+</ParamField>
+
+<ParamField path="SLACK_CHANNEL_ID" type="string">
+  Slack channel ID (starts with `C`).
+</ParamField>
+
+```bash
+export NOTIFICATIONS_SLACK_ENABLED=1
+export SLACK_TOKEN=xoxb-1234567890-1234567890123-abcdefghijklmnopqrstuvwx
+export SLACK_CHANNEL_ID=C1234567890
+```
+
+### Notification levels
+
+<ParamField path="NOTIFICATION_FATAL_LOG" type="string" default="0">
+  Send fatal logs to Slack. Set to `1` to enable.
+</ParamField>
+
+<ParamField path="NOTIFICATION_ERROR_LOG" type="string" default="0">
+  Send error logs to Slack. Set to `1` to enable.
+</ParamField>
+
+<ParamField path="NOTIFICATION_WARNING_LOG" type="string" default="0">
+  Send warning logs to Slack. Set to `1` to enable.
+</ParamField>
+
+<ParamField path="NOTIFICATION_INFO_LOG" type="string" default="0">
+  Send info logs to Slack. Set to `1` to enable.
+</ParamField>
+
+<ParamField path="NOTIFICATION_SUCCESS_LOG" type="string" default="0">
+  Send success logs to Slack. Set to `1` to enable.
+</ParamField>
+
+```bash
+# Only send errors and fatals to Slack
+export NOTIFICATION_FATAL_LOG=1
+export NOTIFICATION_ERROR_LOG=1
+export NOTIFICATION_WARNING_LOG=0
+export NOTIFICATION_INFO_LOG=0
+export NOTIFICATION_SUCCESS_LOG=0
+```
+
+## Behavior differences
+
+### Context extraction (v3 enhancement)
+
+<Tabs>
+  <Tab title="v2 behavior">
+    Context was accepted but **not used**:
+
+    ```go
+    ctx := go_logs.WithTraceID(ctx, "trace-123")
+    go_logs.InfoLogCtx(ctx, "Request") 
+    // Output: [INFO] Request
+    // trace_id was ignored
+    ```
+  </Tab>
+  
+  <Tab title="v3 behavior">
+    Context is properly extracted:
+
+    ```go
+    ctx := go_logs.WithTraceID(ctx, "trace-123")
+    go_logs.InfoLogCtx(ctx, "Request")
+    // Output: [INFO] Request trace_id=trace-123
+    // trace_id is now included
+    ```
+  </Tab>
+</Tabs>
+
+### Log level configuration (v3 enhancement)
+
+<Tabs>
+  <Tab title="v2 behavior">
+    No global level threshold. Each notification level controlled individually:
+
+    ```bash
+    export NOTIFICATION_ERROR_LOG=1
+    export NOTIFICATION_INFO_LOG=1
+    # Both error and info go to Slack
+    ```
+  </Tab>
+  
+  <Tab title="v3 behavior">
+    Can use numeric threshold with `LOG_LEVEL`:
+
+    ```bash
+    export LOG_LEVEL=error
+    # Only error and fatal go to Slack (numeric threshold)
+    ```
+    
+    <Note>
+    If `NOTIFICATION_*_LOG` variables are set, they take precedence over `LOG_LEVEL` for backward compatibility.
+    </Note>
+  </Tab>
+</Tabs>
+
+### File rotation (v3 enhancement)
+
+<Tabs>
+  <Tab title="v2 behavior">
+    Log files grow indefinitely:
+
+    ```bash
+    export SAVE_LOG_FILE=1
+    export LOG_FILE_NAME=app.log
+    # app.log grows forever
+    ```
+  </Tab>
+  
+  <Tab title="v3 behavior">
+    Automatic rotation with size limits:
+
+    ```bash
+    export SAVE_LOG_FILE=1
+    export LOG_FILE_NAME=app.log
+    export LOG_MAX_SIZE=100      # Rotate at 100MB
+    export LOG_MAX_BACKUPS=3     # Keep 3 backups
+    # Files: app.log, app.log.1, app.log.2, app.log.3
+    ```
+  </Tab>
+</Tabs>
+
+## Mixing v2 and v3 APIs
+
+You can freely mix v2 and v3 APIs in the same application:
+
+```go
+package main
+
+import (
+    "os"
+    "github.com/drossan/go_logs"
+)
+
+// v3 logger instance
+var logger, _ = go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithOutput(os.Stdout),
+)
+
+func legacyCode() {
+    // v2 API - global functions
+    go_logs.InfoLog("Using legacy API")
+    go_logs.Errorf("Error code: %d", 404)
+}
+
+func newCode() {
+    // v3 API - structured logging
+    logger.Info("Using new API",
+        go_logs.String("feature", "structured"),
+        go_logs.Int("version", 3),
+    )
+}
+
+func main() {
+    go_logs.Init()  // v2 initialization
+    defer go_logs.Close()
+    
+    legacyCode()    // v2 functions
+    newCode()       // v3 logger
+}
+```
+
+## Thread safety
+
+Both v2 and v3 APIs are **thread-safe**:
+
+```go
+package main
+
+import (
+    "sync"
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    var wg sync.WaitGroup
+    
+    // v2 API is thread-safe
+    for i := 0; i < 10; i++ {
+        wg.Add(1)
+        go func(id int) {
+            defer wg.Done()
+            go_logs.Infof("Goroutine %d", id)
+        }(i)
+    }
+    
+    wg.Wait()
+}
+```
+
+## Performance
+
+v2 and v3 APIs have similar performance for simple logging:
+
+| Operation | v2 API | v3 API |
+|-----------|--------|--------|
+| Simple message | ~500 ns/op | ~500 ns/op |
+| Formatted message | ~1 µs/op | N/A (use fields) |
+| Structured fields | N/A | ~10 ns/field |
+| Level filtering | Always logs | 0.32 ns/op (fast-path) |
+
+<Tip>
+For high-performance scenarios, v3 structured logging is more efficient than v2 formatted strings.
+</Tip>
+
+## Examples
+
+### Web server with backward compatibility
+
+```go
+package main
+
+import (
+    "net/http"
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    go_logs.Init()
+    defer go_logs.Close()
+    
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        // v2 API - works perfectly
+        go_logs.Infof("Request: %s %s", r.Method, r.URL.Path)
+        
+        w.Write([]byte("OK"))
+    })
+    
+    go_logs.InfoLog("Server started on :8080")
+    http.ListenAndServe(":8080", nil)
+}
+```
+
+### Error handling with backward compatibility
+
+```go
+package main
+
+import (
+    "database/sql"
+    "github.com/drossan/go_logs"
+)
+
+func connectDatabase() error {
+    db, err := sql.Open("postgres", "connection-string")
+    if err != nil {
+        // v2 API - still works
+        go_logs.Errorf("Database connection failed: %v", err)
+        return err
+    }
+    
+    go_logs.SuccessLog("Database connected successfully")
+    return nil
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Migration guide" icon="code-compare" href="/migration/v2-to-v3">
+    Learn how to migrate to v3 API
+  </Card>
+  <Card title="v2 API reference" icon="book" href="/api/v2/functions">
+    Complete v2 API documentation
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/environment-variables">
+    Configure v2 behavior
+  </Card>
+  <Card title="Examples" icon="lightbulb" href="/examples/basic-usage">
+    See practical examples
+  </Card>
+</CardGroup>

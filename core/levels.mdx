@@ -1,0 +1,226 @@
+---
+title: "Log Levels"
+description: "Understanding log levels in go_logs - from Trace to Fatal"
+---
+
+## Overview
+
+go_logs uses a **syslog-style numeric level system** for fast, efficient log filtering. Each level has a numeric value that enables threshold-based filtering with minimal overhead (< 5ns).
+
+## Available Levels
+
+<CardGroup cols={2}>
+  <Card title="Trace (10)" icon="magnifying-glass">
+    Extremely detailed, high-volume logging for function entry/exit
+  </Card>
+  <Card title="Debug (20)" icon="bug">
+    Detailed diagnostic information for troubleshooting
+  </Card>
+  <Card title="Info (30)" icon="circle-info">
+    General informational messages about normal operation
+  </Card>
+  <Card title="Warn (40)" icon="triangle-exclamation">
+    Potentially harmful situations that don't prevent operation
+  </Card>
+  <Card title="Error (50)" icon="circle-exclamation">
+    Error events that might still allow the application to continue
+  </Card>
+  <Card title="Fatal (60)" icon="skull-crossbones">
+    Critical errors that terminate the application
+  </Card>
+</CardGroup>
+
+## Level Constants
+
+The library defines these levels in `level.go`:
+
+```go
+const (
+    TraceLevel   Level = 10  // Extremely detailed logging
+    DebugLevel   Level = 20  // Diagnostic information
+    InfoLevel    Level = 30  // General informational messages
+    WarnLevel    Level = 40  // Warning messages
+    ErrorLevel   Level = 50  // Error events
+    FatalLevel   Level = 60  // Critical errors (terminates app)
+    SuccessLevel Level = 25  // v2 backward compatibility
+    SilentLevel  Level = 0   // Disables all logging
+)
+```
+
+<Note>
+  **SuccessLevel** is maintained for v2 backward compatibility and sits between Debug and Info (Level 25).
+</Note>
+
+## Syslog-Style Filtering
+
+go_logs uses **threshold-based filtering**: a log message is output if its level >= the configured threshold.
+
+```go
+// If threshold is WarnLevel (40):
+// - ErrorLevel (50) and FatalLevel (60) will be logged ✓
+// - InfoLevel (30) and below will be filtered out ✗
+
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.WarnLevel),  // Threshold = 40
+)
+
+logger.Info("This won't be logged")     // 30 < 40 ✗
+logger.Warn("This will be logged")      // 40 >= 40 ✓
+logger.Error("This will be logged")     // 50 >= 40 ✓
+```
+
+## Using Log Levels
+
+### Basic Usage
+
+```go
+import "github.com/drossan/go_logs"
+
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+)
+
+logger.Trace("Function entry")  // Filtered out (10 < 30)
+logger.Debug("Processing data") // Filtered out (20 < 30)
+logger.Info("Server started")   // Logged (30 >= 30)
+logger.Warn("High memory")      // Logged (40 >= 30)
+logger.Error("DB failed")       // Logged (50 >= 30)
+```
+
+### Setting Level at Runtime
+
+```go
+logger, _ := go_logs.New(go_logs.WithLevel(go_logs.InfoLevel))
+
+// Change level dynamically
+logger.SetLevel(go_logs.DebugLevel)
+
+// Check current level
+if logger.GetLevel() >= go_logs.DebugLevel {
+    // Expensive debug logging is enabled
+}
+```
+
+### Parsing Level from String
+
+The `ParseLevel` function converts strings to level constants (case-insensitive):
+
+```go
+level := go_logs.ParseLevel("warn")     // Returns WarnLevel
+level := go_logs.ParseLevel("ERROR")    // Returns ErrorLevel
+level := go_logs.ParseLevel("silent")   // Returns SilentLevel
+level := go_logs.ParseLevel("unknown")  // Returns InfoLevel (default)
+```
+
+Supported values:
+- `trace`, `debug`, `info`, `warn`, `warning`, `error`, `fatal`, `success`
+- `silent`, `none`, `disable` (all map to SilentLevel)
+
+### Environment Variable Configuration
+
+```bash
+# Set log level via environment variable
+export LOG_LEVEL=debug
+
+# In your application, this is loaded automatically
+logger, _ := go_logs.New()  // Uses DEBUG level from LOG_LEVEL
+```
+
+## Level Methods
+
+Each level has a corresponding convenience method:
+
+```go
+logger.Trace("Function called", go_logs.String("func", "processData"))
+logger.Debug("Processing", go_logs.Int("items", 42))
+logger.Info("Server started", go_logs.Int("port", 8080))
+logger.Warn("High memory", go_logs.Float64("usage_pct", 85.5))
+logger.Error("DB error", go_logs.Err(err))
+logger.Fatal("Config failed", go_logs.Err(err))  // Calls os.Exit(1)
+```
+
+<Warning>
+  **Fatal** logs the message and then calls `os.Exit(1)`, terminating the application immediately.
+</Warning>
+
+## ShouldLog Method
+
+The `ShouldLog` method allows manual level checking (useful in hooks and filters):
+
+```go
+if entry.Level.ShouldLog(go_logs.ErrorLevel) {
+    // Send to monitoring system
+    sendToMonitoring(entry)
+}
+```
+
+## Performance
+
+Level filtering is the **critical performance optimization** in go_logs:
+
+- **Fast-path filtering**: 0.32 ns/op (< 5ns target)
+- **Zero allocations** when a log is filtered out
+- Checked **before** any field creation or formatting
+
+```go
+// If level doesn't meet threshold, returns immediately
+if !level.shouldLog(l.getLevel()) {
+    return  // No allocations, no formatting, < 5ns
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use appropriate levels">
+    - **Trace**: Function entry/exit, loop iterations (very verbose)
+    - **Debug**: Variable values, algorithm steps, request/response details
+    - **Info**: Server started, request completed, feature enabled
+    - **Warn**: Deprecated feature used, high memory, retry attempt
+    - **Error**: Database error, API failure, invalid input
+    - **Fatal**: Cannot load config, cannot bind port, missing required dependency
+  </Accordion>
+
+  <Accordion title="Production level recommendations">
+    - **Production**: Use `InfoLevel` or `WarnLevel`
+    - **Staging**: Use `DebugLevel` for troubleshooting
+    - **Development**: Use `TraceLevel` or `DebugLevel`
+    - **Silent**: Use `SilentLevel` to disable all logging (e.g., during tests)
+  </Accordion>
+
+  <Accordion title="Dynamic level changes">
+    ```go
+    // Enable debug logging temporarily for troubleshooting
+    logger.SetLevel(go_logs.DebugLevel)
+    defer logger.SetLevel(go_logs.InfoLevel)
+
+    // Expensive operation
+    debugHeavyOperation()
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Level String Representation
+
+Levels are formatted as uppercase strings:
+
+```go
+go_logs.TraceLevel.String()   // "TRACE"
+go_logs.DebugLevel.String()   // "DEBUG"
+go_logs.InfoLevel.String()    // "INFO"
+go_logs.WarnLevel.String()    // "WARN"
+go_logs.ErrorLevel.String()   // "ERROR"
+go_logs.FatalLevel.String()   // "FATAL"
+go_logs.SilentLevel.String()  // "SILENT"
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Structured Logging" icon="table" href="/core/structured-logging">
+    Learn about adding structured fields to logs
+  </Card>
+  <Card title="Formatters" icon="palette" href="/core/formatters">
+    Choose between Text and JSON formatters
+  </Card>
+</CardGroup>

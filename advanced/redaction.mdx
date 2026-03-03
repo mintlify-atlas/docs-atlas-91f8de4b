@@ -1,0 +1,438 @@
+---
+title: 'Sensitive Data Redaction'
+description: 'Automatically mask passwords, tokens, and other sensitive data in logs'
+---
+
+## Overview
+
+The redaction system automatically masks sensitive data in log entries to prevent accidental exposure of secrets, credentials, and personal information.
+
+Implementation: `~/workspace/source/options.go:83-129`
+
+## Quick Start
+
+### Common Sensitive Fields
+
+From `~/workspace/source/options.go:128`:
+
+```go
+import "github.com/drossan/go_logs"
+
+logger, _ := go_logs.New(
+    go_logs.WithCommonRedaction(),
+)
+
+// These fields are automatically masked:
+logger.Info("user login",
+    go_logs.String("username", "alice"),
+    go_logs.String("password", "secret123"),  // Masked as ***
+    go_logs.String("token", "abc-xyz-789"),   // Masked as ***
+)
+// Output: time="2026-03-03 10:00:00" level=INFO msg="user login" username=alice password=*** token=***
+```
+
+### Custom Redaction
+
+From `~/workspace/source/options.go:59`:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRedactor("credit_card", "ssn", "email"),
+)
+
+logger.Info("payment processed",
+    go_logs.String("credit_card", "4111-1111-1111-1111"),  // Masked
+    go_logs.String("amount", "99.99"),                      // Not masked
+)
+```
+
+## Redactor Implementation
+
+From `~/workspace/source/options.go:83-113`:
+
+```go
+type Redactor struct {
+    sensitiveKeys map[string]bool
+    maskValue     string
+}
+
+func NewRedactor(keys ...string) *Redactor {
+    sensitiveKeys := make(map[string]bool)
+    for _, key := range keys {
+        sensitiveKeys[key] = true
+    }
+    return &Redactor{
+        sensitiveKeys: sensitiveKeys,
+        maskValue:     "***",
+    }
+}
+
+func (r *Redactor) Redact(entry *Entry) {
+    for i := range entry.Fields {
+        if r.sensitiveKeys[entry.Fields[i].Key()] {
+            entry.Fields[i] = Field{
+                key:       entry.Fields[i].Key(),
+                valueType: entry.Fields[i].Type(),
+                value:     r.maskValue,  // Replace value with ***
+            }
+        }
+    }
+}
+```
+
+## Common Sensitive Keys
+
+From `~/workspace/source/options.go:116-124`:
+
+```go
+func CommonSensitiveKeys() []string {
+    return []string{
+        "password", "passwd", "pwd",
+        "token", "api_key", "apikey", "api-key",
+        "secret", "authorization", "auth",
+        "cookie", "session",
+        "credit_card", "ssn", "social_security",
+    }
+}
+```
+
+The `WithCommonRedaction()` option masks all these fields automatically.
+
+## How Redaction Works
+
+From `~/workspace/source/logger_impl.go:186-189`:
+
+1. Log entry is created with fields
+2. Caller info captured (if enabled)
+3. Stack trace captured (if enabled)
+4. **Redactor scans all fields and masks sensitive ones**
+5. Hooks execute
+6. Entry formatted and written
+
+```go
+// Redaction happens BEFORE hooks and formatting
+if l.redactor != nil {
+    l.redactor.Redact(entry)
+}
+```
+
+This ensures:
+- Hooks receive redacted data (preventing leaks to Slack, etc.)
+- Formatters write redacted values to files
+- Original sensitive data never persists
+
+## Configuration Options
+
+### WithRedactor
+
+From `~/workspace/source/options.go:59`:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRedactor("password", "token", "api_key"),
+)
+```
+
+Masks only the specified field names.
+
+### WithCommonRedaction
+
+From `~/workspace/source/options.go:128`:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCommonRedaction(),
+)
+```
+
+Masks all common sensitive fields (passwords, tokens, cookies, etc.).
+
+### Combining Custom and Common
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCommonRedaction(),
+    go_logs.WithRedactor("internal_id", "custom_secret"),
+)
+```
+
+Note: Only the **last** `WithRedactor` call is applied. To combine, create a custom list:
+
+```go
+sensitiveKeys := append(
+    go_logs.CommonSensitiveKeys(),
+    "internal_id", "custom_secret",
+)
+
+logger, _ := go_logs.New(
+    go_logs.WithRedactor(sensitiveKeys...),
+)
+```
+
+## Examples
+
+### Redacting Authentication Data
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCommonRedaction(),
+)
+
+func Login(username, password string) {
+    logger.Info("login attempt",
+        go_logs.String("username", username),     // Visible
+        go_logs.String("password", password),     // Masked as ***
+        go_logs.String("ip", "192.168.1.100"),   // Visible
+    )
+}
+
+// Output: level=INFO msg="login attempt" username=alice password=*** ip=192.168.1.100
+```
+
+### Redacting API Keys
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRedactor("api_key", "api-key", "apikey"),
+)
+
+func CallExternalAPI(apiKey string) {
+    logger.Debug("calling API",
+        go_logs.String("api_key", apiKey),        // Masked
+        go_logs.String("endpoint", "/users"),     // Visible
+    )
+}
+
+// Output: level=DEBUG msg="calling API" api_key=*** endpoint=/users
+```
+
+### Redacting Payment Information
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRedactor("credit_card", "cvv", "billing_address"),
+)
+
+func ProcessPayment(card string, cvv string) {
+    logger.Info("payment processing",
+        go_logs.String("credit_card", card),      // Masked
+        go_logs.String("cvv", cvv),               // Masked
+        go_logs.String("amount", "99.99"),        // Visible
+    )
+}
+
+// Output: level=INFO msg="payment processing" credit_card=*** cvv=*** amount=99.99
+```
+
+### Redacting in Child Loggers
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCommonRedaction(),
+)
+
+// Child logger inherits redaction configuration
+requestLogger := logger.With(
+    go_logs.String("request_id", "abc-123"),
+)
+
+requestLogger.Info("processing request",
+    go_logs.String("token", "secret-token"),  // Still masked in child
+)
+```
+
+## Field Name Matching
+
+Redaction is **case-sensitive** and matches **exact field names**:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRedactor("password"),
+)
+
+logger.Info("example",
+    go_logs.String("password", "secret"),     // Masked (exact match)
+    go_logs.String("Password", "secret"),     // NOT masked (different case)
+    go_logs.String("user_password", "sec"),  // NOT masked (different name)
+)
+```
+
+To mask variations, specify all of them:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRedactor("password", "Password", "user_password", "pwd"),
+)
+```
+
+## Mask Value
+
+From `~/workspace/source/options.go:96-97`:
+
+All redacted fields are replaced with `"***"`.
+
+The mask value is currently fixed. To customize:
+
+```go
+redactor := go_logs.NewRedactor("password", "token")
+// Access redactor.maskValue if exposed or create custom redactor
+```
+
+## Performance Impact
+
+From `~/workspace/source/options.go:103-112`:
+
+- **O(n)** where n = number of fields
+- **No allocations** for non-redacted fields
+- **Fast map lookup** for sensitive key detection
+- **Negligible overhead** (~10-50ns per field)
+
+Benchmark (approximate):
+```
+Without Redaction: 220 ns/op
+With Redaction:    250 ns/op  (+13%)
+```
+
+## Security Best Practices
+
+### Always Enable in Production
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithCommonRedaction(),  // CRITICAL for security
+)
+```
+
+### Redact Before Hooks
+
+Redaction occurs **before** hooks execute (from `~/workspace/source/logger_impl.go:186-197`):
+
+```go
+// Entry lifecycle
+1. Create entry
+2. Capture caller/stack
+3. Apply redaction  ← Sensitive data masked here
+4. Run hooks        ← Hooks see only redacted data
+5. Format entry
+6. Write to output
+```
+
+This prevents sensitive data from leaking to:
+- Slack notifications
+- Metrics systems
+- External logging services
+- Custom hooks
+
+### Review Common Keys
+
+Periodically review `CommonSensitiveKeys()` to ensure it covers your use case:
+
+```go
+// Check what's included
+keys := go_logs.CommonSensitiveKeys()
+fmt.Printf("Redacting: %v\n", keys)
+
+// Add application-specific keys
+customKeys := append(keys, "internal_token", "api_secret")
+logger, _ := go_logs.New(
+    go_logs.WithRedactor(customKeys...),
+)
+```
+
+### Avoid Logging Secrets Entirely
+
+Redaction is a **safety net**, not a primary defense:
+
+```go
+// GOOD: Don't log secrets at all
+logger.Info("API call succeeded",
+    go_logs.String("endpoint", "/users"),
+    go_logs.Int("status", 200),
+)
+
+// ACCEPTABLE: Log with redaction as backup
+logger.Debug("API call details",
+    go_logs.String("api_key", apiKey),  // Redacted, but still in code
+)
+
+// BAD: Logging secrets in message
+logger.Info(fmt.Sprintf("API key is %s", apiKey))  // Can't be redacted!
+```
+
+## Testing Redaction
+
+```go
+func TestRedaction(t *testing.T) {
+    buf := &bytes.Buffer{}
+    logger, _ := go_logs.New(
+        go_logs.WithOutput(buf),
+        go_logs.WithFormatter(go_logs.NewTextFormatter()),
+        go_logs.WithRedactor("password"),
+    )
+
+    logger.Info("test",
+        go_logs.String("password", "secret123"),
+    )
+
+    output := buf.String()
+    if strings.Contains(output, "secret123") {
+        t.Error("password was not redacted")
+    }
+    if !strings.Contains(output, "***") {
+        t.Error("redacted value not found")
+    }
+}
+```
+
+## Limitations
+
+### Message Content Not Redacted
+
+Redaction only applies to **structured fields**, not the message:
+
+```go
+logger.Info("Password is: secret123",  // NOT redacted (in message)
+    go_logs.String("password", "secret123"),  // Redacted (in field)
+)
+```
+
+**Solution**: Never put sensitive data in messages. Use structured fields:
+
+```go
+logger.Info("user authenticated",
+    go_logs.String("username", "alice"),
+    // Password not logged at all
+)
+```
+
+### Nested Structures
+
+Redaction doesn't traverse nested structures in `Any()` fields:
+
+```go
+type User struct {
+    Name     string
+    Password string
+}
+
+logger.Info("user created",
+    go_logs.Any("user", User{Name: "alice", Password: "secret"}),  // Password visible!
+)
+```
+
+**Solution**: Log individual fields or implement custom redaction:
+
+```go
+logger.Info("user created",
+    go_logs.String("name", user.Name),
+    go_logs.String("password", user.Password),  // Redacted
+)
+```
+
+## See Also
+
+- [Hooks](/advanced/hooks) - Redaction happens before hooks execute
+- [Security Guide](/guides/security) - Comprehensive security practices
+- [Fields](/core-concepts/fields) - Structured logging with type-safe fields

@@ -1,0 +1,502 @@
+---
+title: CaptureBuffer
+description: Thread-safe buffer for capturing log output in tests
+---
+
+## Overview
+
+CaptureBuffer is a thread-safe `io.Writer` implementation that captures log output in memory for testing. Unlike MockLogger (which captures structured entries), CaptureBuffer captures the raw formatted output, making it ideal for integration tests and formatter verification.
+
+## Creating a CaptureBuffer
+
+```go
+package myapp
+
+import (
+    "testing"
+    "github.com/drossan/go_logs"
+)
+
+func TestLogOutput(t *testing.T) {
+    // Create capture buffer
+    buf := go_logs.NewCaptureBuffer()
+    
+    // Create logger that writes to buffer
+    logger, _ := go_logs.New(
+        go_logs.WithOutput(buf),
+        go_logs.WithFormatter(go_logs.NewTextFormatter()),
+    )
+    
+    logger.Info("test message")
+    
+    // Verify output contains expected text
+    if !buf.Contains("test message") {
+        t.Error("expected 'test message' in output")
+    }
+}
+```
+
+## API Reference
+
+### Creation
+
+<ParamField path="NewCaptureBuffer()" type="*CaptureBuffer">
+  Creates a new thread-safe CaptureBuffer with:
+  - Empty internal buffer
+  - Mutex for concurrent access
+  - Full io.Writer implementation
+</ParamField>
+
+### Core Methods
+
+#### Write()
+
+Implements `io.Writer` interface (automatically called by logger):
+
+```go
+buf := go_logs.NewCaptureBuffer()
+n, err := buf.Write([]byte("log line\n"))
+```
+
+#### String()
+
+Returns the entire buffer contents as a string:
+
+```go
+buf := go_logs.NewCaptureBuffer()
+logger, _ := go_logs.New(go_logs.WithOutput(buf))
+
+logger.Info("first")
+logger.Info("second")
+
+output := buf.String()
+fmt.Println(output)
+// [2026/03/03 12:00:00] INFO first
+// [2026/03/03 12:00:01] INFO second
+```
+
+#### Bytes()
+
+Returns the buffer contents as a byte slice:
+
+```go
+data := buf.Bytes()
+if len(data) == 0 {
+    t.Error("expected log output")
+}
+```
+
+#### Reset()
+
+Clears the buffer completely:
+
+```go
+buf.Write([]byte("old data"))
+assert.True(t, buf.Contains("old data"))
+
+buf.Reset()
+
+assert.Equal(t, "", buf.String())
+assert.Equal(t, 0, buf.LineCount())
+```
+
+### Search Methods
+
+#### Contains()
+
+Checks if buffer contains a substring:
+
+```go
+buf := go_logs.NewCaptureBuffer()
+logger, _ := go_logs.New(go_logs.WithOutput(buf))
+
+logger.Info("user logged in", go_logs.String("username", "john"))
+
+if !buf.Contains("user logged in") {
+    t.Error("expected 'user logged in' in output")
+}
+
+if !buf.Contains("username=john") {
+    t.Error("expected 'username=john' in output")
+}
+
+if buf.Contains("password") {
+    t.Error("should not contain 'password'")
+}
+```
+
+#### ContainsAll()
+
+Checks if buffer contains all specified substrings:
+
+```go
+logger.Info("processing order",
+    go_logs.Int("order_id", 12345),
+    go_logs.Float64("total", 99.99),
+)
+
+if !buf.ContainsAll("processing order", "order_id=12345", "total=99.99") {
+    t.Error("expected all substrings in output")
+}
+```
+
+#### ContainsAny()
+
+Checks if buffer contains at least one of the specified substrings:
+
+```go
+logger.Error("database error", go_logs.Err(dbErr))
+
+// Check for any error indicator
+if !buf.ContainsAny("ERROR", "error", "failed") {
+    t.Error("expected error indicator in output")
+}
+```
+
+### Line Methods
+
+#### Lines()
+
+Returns all lines as a slice:
+
+```go
+logger.Info("line 1")
+logger.Info("line 2")
+logger.Info("line 3")
+
+lines := buf.Lines()
+
+if len(lines) != 3 {
+    t.Errorf("expected 3 lines, got %d", len(lines))
+}
+
+for i, line := range lines {
+    fmt.Printf("Line %d: %s\n", i+1, line)
+}
+```
+
+#### LastLine()
+
+Returns the most recent line:
+
+```go
+logger.Info("first log")
+logger.Info("second log")
+logger.Error("last log")
+
+last := buf.LastLine()
+
+if !strings.Contains(last, "last log") {
+    t.Errorf("expected 'last log', got: %s", last)
+}
+
+if !strings.Contains(last, "ERROR") {
+    t.Error("last line should contain ERROR level")
+}
+```
+
+#### LineCount()
+
+Returns the number of lines:
+
+```go
+logger.Info("log 1")
+logger.Info("log 2")
+
+if buf.LineCount() != 2 {
+    t.Errorf("expected 2 lines, got %d", buf.LineCount())
+}
+```
+
+## Testing Examples
+
+### Example 1: Test Text Formatter Output
+
+```go
+func TestTextFormatter(t *testing.T) {
+    buf := go_logs.NewCaptureBuffer()
+    logger, _ := go_logs.New(
+        go_logs.WithOutput(buf),
+        go_logs.WithFormatter(go_logs.NewTextFormatter()),
+    )
+    
+    logger.Info("test message", go_logs.String("key", "value"))
+    
+    output := buf.String()
+    
+    // Verify format: [timestamp] LEVEL message key=value
+    if !strings.Contains(output, "INFO") {
+        t.Error("expected INFO level in output")
+    }
+    
+    if !strings.Contains(output, "test message") {
+        t.Error("expected message in output")
+    }
+    
+    if !strings.Contains(output, "key=value") {
+        t.Error("expected field in output")
+    }
+}
+```
+
+### Example 2: Test JSON Formatter Output
+
+```go
+func TestJSONFormatter(t *testing.T) {
+    buf := go_logs.NewCaptureBuffer()
+    logger, _ := go_logs.New(
+        go_logs.WithOutput(buf),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    )
+    
+    logger.Info("json test",
+        go_logs.String("service", "api"),
+        go_logs.Int("port", 8080),
+    )
+    
+    // Parse JSON output
+    var result map[string]interface{}
+    err := json.Unmarshal(buf.Bytes(), &result)
+    if err != nil {
+        t.Fatalf("failed to parse JSON: %v", err)
+    }
+    
+    // Verify JSON structure
+    if result["level"] != "INFO" {
+        t.Error("expected INFO level")
+    }
+    
+    if result["message"] != "json test" {
+        t.Error("expected 'json test' message")
+    }
+    
+    fields := result["fields"].(map[string]interface{})
+    if fields["service"] != "api" {
+        t.Error("expected service=api")
+    }
+}
+```
+
+### Example 3: Test Multiple Log Lines
+
+```go
+func TestMultipleLogLines(t *testing.T) {
+    buf := go_logs.NewCaptureBuffer()
+    logger, _ := go_logs.New(go_logs.WithOutput(buf))
+    
+    logger.Info("starting")
+    logger.Debug("processing")  // May be filtered
+    logger.Info("completed")
+    
+    lines := buf.Lines()
+    
+    // Verify at least 2 lines (Debug may be filtered)
+    if len(lines) < 2 {
+        t.Errorf("expected at least 2 lines, got %d", len(lines))
+    }
+    
+    // Verify first and last lines
+    if !strings.Contains(lines[0], "starting") {
+        t.Error("first line should contain 'starting'")
+    }
+    
+    lastLine := lines[len(lines)-1]
+    if !strings.Contains(lastLine, "completed") {
+        t.Error("last line should contain 'completed'")
+    }
+}
+```
+
+### Example 4: Test Level Filtering
+
+```go
+func TestLevelFiltering(t *testing.T) {
+    buf := go_logs.NewCaptureBuffer()
+    logger, _ := go_logs.New(
+        go_logs.WithOutput(buf),
+        go_logs.WithLevel(go_logs.WarnLevel), // Only Warn+
+    )
+    
+    logger.Debug("debug message")  // Filtered
+    logger.Info("info message")    // Filtered
+    logger.Warn("warn message")    // Logged
+    logger.Error("error message")  // Logged
+    
+    output := buf.String()
+    
+    // Verify filtered logs are not in output
+    if buf.Contains("debug message") {
+        t.Error("debug should be filtered")
+    }
+    
+    if buf.Contains("info message") {
+        t.Error("info should be filtered")
+    }
+    
+    // Verify non-filtered logs are present
+    if !buf.Contains("warn message") {
+        t.Error("warn should be logged")
+    }
+    
+    if !buf.Contains("error message") {
+        t.Error("error should be logged")
+    }
+    
+    // Should have exactly 2 lines
+    if buf.LineCount() != 2 {
+        t.Errorf("expected 2 lines, got %d", buf.LineCount())
+    }
+}
+```
+
+### Example 5: Test Structured Fields
+
+```go
+func TestStructuredFields(t *testing.T) {
+    buf := go_logs.NewCaptureBuffer()
+    logger, _ := go_logs.New(go_logs.WithOutput(buf))
+    
+    err := errors.New("connection timeout")
+    
+    logger.Error("request failed",
+        go_logs.String("method", "GET"),
+        go_logs.String("path", "/api/users"),
+        go_logs.Int("status", 500),
+        go_logs.Float64("duration", 5.234),
+        go_logs.Bool("retry", true),
+        go_logs.Err(err),
+    )
+    
+    // Verify all fields are in output
+    if !buf.ContainsAll(
+        "request failed",
+        "method=GET",
+        "path=/api/users",
+        "status=500",
+        "duration=5.234",
+        "retry=true",
+        "error=connection timeout",
+    ) {
+        t.Error("expected all fields in output")
+        t.Logf("Output: %s", buf.String())
+    }
+}
+```
+
+### Example 6: Integration Test
+
+```go
+func TestApplicationStartup(t *testing.T) {
+    buf := go_logs.NewCaptureBuffer()
+    logger, _ := go_logs.New(
+        go_logs.WithOutput(buf),
+        go_logs.WithLevel(go_logs.InfoLevel),
+    )
+    
+    // Simulate application startup
+    app := NewApplication(logger)
+    err := app.Start()
+    
+    if err != nil {
+        t.Fatalf("app failed to start: %v", err)
+    }
+    
+    // Verify startup logs
+    if !buf.Contains("loading configuration") {
+        t.Error("expected config loading log")
+    }
+    
+    if !buf.Contains("database connected") {
+        t.Error("expected database connection log")
+    }
+    
+    if !buf.Contains("server listening") {
+        t.Error("expected server start log")
+    }
+    
+    // Verify startup sequence
+    lines := buf.Lines()
+    if len(lines) < 3 {
+        t.Error("expected at least 3 startup logs")
+    }
+    
+    // Last line should confirm ready state
+    lastLine := buf.LastLine()
+    if !strings.Contains(lastLine, "ready") {
+        t.Error("expected 'ready' in last log")
+    }
+}
+```
+
+## Thread Safety
+
+CaptureBuffer is fully thread-safe using mutex locks:
+
+```go
+func TestConcurrentWrites(t *testing.T) {
+    buf := go_logs.NewCaptureBuffer()
+    logger, _ := go_logs.New(go_logs.WithOutput(buf))
+    
+    var wg sync.WaitGroup
+    
+    for i := 0; i < 100; i++ {
+        wg.Add(1)
+        go func(id int) {
+            defer wg.Done()
+            logger.Info("concurrent log", go_logs.Int("id", id))
+        }(i)
+    }
+    
+    wg.Wait()
+    
+    // All 100 logs should be captured
+    if buf.LineCount() != 100 {
+        t.Errorf("expected 100 lines, got %d", buf.LineCount())
+    }
+}
+```
+
+## Combining with Real Logger Tests
+
+From `logger_test.go:47-61`:
+
+```go
+// TestLogger_Log verifies basic Log() functionality
+func TestLogger_Log(t *testing.T) {
+    buf := &bytes.Buffer{}
+    logger, _ := New(WithOutput(buf))
+
+    logger.Log(InfoLevel, "test message", String("key", "value"))
+
+    output := buf.String()
+    if !strings.Contains(output, "test message") {
+        t.Error("Log() output should contain message")
+    }
+    if !strings.Contains(output, "key=value") {
+        t.Error("Log() output should contain fields")
+    }
+}
+```
+
+<Tip>
+  You can use `bytes.Buffer` directly for simple cases, or `CaptureBuffer` for its additional helper methods like `Contains()`, `Lines()`, etc.
+</Tip>
+
+## Source Code Reference
+
+CaptureBuffer implementation: `testing.go:9-134`
+
+<Card title="View Full Implementation" icon="github" href="https://github.com/drossan/go_logs/blob/main/testing.go#L9-L134">
+  See the complete CaptureBuffer source code
+</Card>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="MockLogger" icon="robot" href="/testing/mock-logger">
+    For structured entry inspection
+  </Card>
+  <Card title="Testing Overview" icon="flask" href="/testing/overview">
+    Testing best practices
+  </Card>
+</CardGroup>

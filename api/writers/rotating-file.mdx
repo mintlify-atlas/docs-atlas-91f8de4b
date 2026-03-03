@@ -1,0 +1,575 @@
+---
+title: 'RotatingFileWriter'
+description: 'Automatic log file rotation by size with zero dependencies'
+---
+
+## Overview
+
+`RotatingFileWriter` implements `io.Writer` with automatic log file rotation based on file size. When a log file exceeds the configured size, it's rotated and backups are created with incrementing suffixes (.1, .2, .3, etc.).
+
+This is a zero-dependency implementation using only the Go standard library, providing buffered writes for high performance.
+
+## Type Definition
+
+```go
+type RotatingFileWriter struct {
+    filename    string        // Base name of the log file
+    maxSize     int64         // Maximum size in bytes before rotation
+    maxBackups  int           // Maximum number of backup files to keep
+    currentSize int64         // Current size of active log file
+    file        *os.File      // Active log file handle
+    writer      *bufio.Writer // Buffered writer
+    mu          sync.Mutex    // Mutex for thread-safety
+}
+```
+
+## Constructor Function
+
+### NewRotatingFileWriter
+
+Creates a new RotatingFileWriter with the specified parameters.
+
+```go
+func NewRotatingFileWriter(filename string, maxSizeMB int, maxBackups int) (*RotatingFileWriter, error)
+```
+
+**Parameters:**
+- `filename` - Path to the log file (e.g., "app.log" or "/var/log/app.log")
+- `maxSizeMB` - Maximum size in megabytes before rotation (must be > 0)
+- `maxBackups` - Maximum number of backup files to keep (must be >= 0)
+
+**Returns:**
+- `*RotatingFileWriter` - Configured writer
+- `error` - Error if file cannot be created/opened or parameters are invalid
+
+**Behavior:**
+- Resumes appending to existing file if it exists
+- Creates new file with permissions 0600 (owner read/write only)
+- Creates parent directories if they don't exist (with permissions 0755)
+
+**Example:**
+```go
+import "github.com/drossan/go_logs"
+
+// 100MB max size, keep 3 backups (app.log.1, .2, .3)
+writer, err := go_logs.NewRotatingFileWriter("app.log", 100, 3)
+if err != nil {
+    log.Fatal(err)
+}
+defer writer.Close()
+
+logger := go_logs.New(
+    go_logs.WithOutput(writer),
+)
+```
+
+**Location:** rotating_writer.go:60
+
+## Methods
+
+### Write
+
+Implements io.Writer interface. Writes bytes to the log file, rotating if necessary.
+
+```go
+func (w *RotatingFileWriter) Write(p []byte) (n int, err error)
+```
+
+**Parameters:**
+- `p` - Byte slice to write
+
+**Returns:**
+- `n` - Number of bytes written
+- `err` - Error if write or rotation failed
+
+**Behavior:**
+- Thread-safe (uses mutex)
+- Checks if rotation needed before writing
+- Rotates if current size + new data > max size
+- Updates current size after successful write
+- Returns error if writer is closed
+
+**Location:** rotating_writer.go:90
+
+### Rotate
+
+Performs a manual rotation of the log file.
+
+```go
+func (w *RotatingFileWriter) Rotate() error
+```
+
+**Returns:**
+- `error` - Error if rotation failed
+
+**Rotation sequence:**
+1. Flush and close current log file
+2. Rename backups: .3 → .4, .2 → .3, .1 → .2
+3. Rename current file: app.log → app.log.1
+4. Create new empty app.log
+5. Delete backup beyond maxBackups limit
+
+**Use cases:**
+- Force rotation (e.g., on SIGHUP signal)
+- Manual rotation independent of size
+- Integration with log rotation systems
+
+**Example:**
+```go
+// Force rotation on SIGHUP
+signal.Notify(sigChan, syscall.SIGHUP)
+go func() {
+    for range sigChan {
+        if err := writer.Rotate(); err != nil {
+            log.Printf("Rotation failed: %v", err)
+        }
+    }
+}()
+```
+
+**Location:** rotating_writer.go:134
+
+### Sync
+
+Flushes buffered data to disk.
+
+```go
+func (w *RotatingFileWriter) Sync() error
+```
+
+**Returns:**
+- `error` - Error if flush or sync failed
+
+**Behavior:**
+- Flushes buffered writer
+- Calls file.Sync() to ensure data is on disk
+- Safe to call on closed writer (returns nil)
+
+**Use cases:**
+- Before application exit
+- After critical log messages
+- Periodic flushing for durability
+
+**Example:**
+```go
+logger.Error("Critical error", go_logs.Err(err))
+writer.Sync() // Ensure error is on disk
+```
+
+**Location:** rotating_writer.go:222
+
+### Close
+
+Flushes buffered data and closes the log file.
+
+```go
+func (w *RotatingFileWriter) Close() error
+```
+
+**Returns:**
+- `error` - Error if flush or close failed
+
+**Behavior:**
+- Idempotent (safe to call multiple times)
+- Flushes buffered data before closing
+- Marks writer as closed (subsequent writes fail)
+
+**Example:**
+```go
+writer, _ := go_logs.NewRotatingFileWriter("app.log", 100, 3)
+defer writer.Close() // Always close before exit
+```
+
+**Location:** rotating_writer.go:250
+
+### GetMaxSize
+
+Returns the maximum file size in bytes before rotation.
+
+```go
+func (w *RotatingFileWriter) GetMaxSize() int64
+```
+
+**Returns:**
+- `int64` - Maximum size in bytes
+
+**Use cases:**
+- Monitoring and diagnostics
+- Testing
+
+**Location:** rotating_writer.go:278
+
+### GetMaxBackups
+
+Returns the maximum number of backup files to keep.
+
+```go
+func (w *RotatingFileWriter) GetMaxBackups() int
+```
+
+**Returns:**
+- `int` - Maximum backup count
+
+**Use cases:**
+- Monitoring and diagnostics
+- Testing
+
+**Location:** rotating_writer.go:287
+
+## Rotation Behavior
+
+### File Naming
+
+Rotation creates backup files with numeric suffixes:
+
+```
+app.log       # Current active log
+app.log.1     # Most recent backup
+app.log.2     # Second most recent
+app.log.3     # Oldest backup (if maxBackups=3)
+```
+
+### Rotation Process
+
+**Before rotation:**
+```
+app.log (100MB - full)
+app.log.1
+app.log.2
+```
+
+**After rotation:**
+```
+app.log (0 bytes - new)
+app.log.1 (100MB - was app.log)
+app.log.2 (was app.log.1)
+app.log.3 (was app.log.2)
+```
+
+### Automatic Rotation Trigger
+
+Rotation occurs when:
+```
+current_size + new_data_size > max_size
+```
+
+Rotation happens **before** writing the new data.
+
+## Usage Examples
+
+### Basic File Rotation
+
+```go
+import "github.com/drossan/go_logs"
+
+// Rotate at 100MB, keep 5 backups
+writer, err := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+if err != nil {
+    log.Fatalf("Failed to create writer: %v", err)
+}
+defer writer.Close()
+
+logger := go_logs.New(
+    go_logs.WithOutput(writer),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+)
+
+logger.Info("Application started")
+```
+
+### Production Setup
+
+```go
+import (
+    "github.com/drossan/go_logs"
+    "os"
+)
+
+func setupLogger() (*go_logs.Logger, error) {
+    // Create rotating file writer
+    writer, err := go_logs.NewRotatingFileWriter(
+        "/var/log/myapp/app.log",
+        100, // 100MB per file
+        10,  // Keep 10 backups (1GB total)
+    )
+    if err != nil {
+        return nil, err
+    }
+    
+    logger := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithOutput(writer),
+    )
+    
+    return logger, nil
+}
+
+func main() {
+    logger, err := setupLogger()
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    // Ensure logs are flushed on exit
+    defer func() {
+        if syncer, ok := logger.(interface{ Sync() error }); ok {
+            syncer.Sync()
+        }
+    }()
+    
+    logger.Info("Server starting",
+        go_logs.Int("port", 8080),
+    )
+}
+```
+
+### With SIGHUP Rotation
+
+```go
+import (
+    "os"
+    "os/signal"
+    "syscall"
+)
+
+writer, _ := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+defer writer.Close()
+
+// Handle SIGHUP for manual rotation
+sigChan := make(chan os.Signal, 1)
+signal.Notify(sigChan, syscall.SIGHUP)
+
+go func() {
+    for range sigChan {
+        if err := writer.Rotate(); err != nil {
+            log.Printf("Manual rotation failed: %v", err)
+        } else {
+            log.Println("Log file rotated successfully")
+        }
+    }
+}()
+
+logger := go_logs.New(go_logs.WithOutput(writer))
+
+// Trigger rotation: kill -HUP <pid>
+```
+
+### Combined with MultiWriter
+
+```go
+import (
+    "github.com/drossan/go_logs"
+    "os"
+)
+
+// Log to both file and console
+fileWriter, _ := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+defer fileWriter.Close()
+
+multiWriter := go_logs.NewMultiWriter(fileWriter, os.Stdout)
+
+logger := go_logs.New(
+    go_logs.WithOutput(multiWriter),
+    go_logs.WithFormatter(go_logs.NewTextFormatter()),
+)
+
+// Logs go to both file and console
+logger.Info("Dual output")
+```
+
+### Small Files for Testing
+
+```go
+// Rotate every 1MB for testing
+writer, _ := go_logs.NewRotatingFileWriter("test.log", 1, 3)
+defer writer.Close()
+
+logger := go_logs.New(go_logs.WithOutput(writer))
+
+// Generate logs to trigger rotation
+for i := 0; i < 10000; i++ {
+    logger.Info("Test message",
+        go_logs.Int("iteration", i),
+        go_logs.String("data", strings.Repeat("x", 100)),
+    )
+}
+```
+
+### Custom Rotation Path
+
+```go
+import "path/filepath"
+
+// Create logs in user's home directory
+homeDir, _ := os.UserHomeDir()
+logPath := filepath.Join(homeDir, ".myapp", "logs", "app.log")
+
+writer, err := go_logs.NewRotatingFileWriter(logPath, 50, 3)
+if err != nil {
+    log.Fatal(err)
+}
+defer writer.Close()
+
+logger := go_logs.New(go_logs.WithOutput(writer))
+```
+
+## Configuration via Environment
+
+```go
+import (
+    "os"
+    "strconv"
+)
+
+func createRotatingWriter() (*go_logs.RotatingFileWriter, error) {
+    // Read from environment variables
+    filename := os.Getenv("LOG_FILE_PATH")
+    if filename == "" {
+        filename = "app.log"
+    }
+    
+    maxSizeMB := 100
+    if size := os.Getenv("LOG_MAX_SIZE"); size != "" {
+        maxSizeMB, _ = strconv.Atoi(size)
+    }
+    
+    maxBackups := 5
+    if backups := os.Getenv("LOG_MAX_BACKUPS"); backups != "" {
+        maxBackups, _ = strconv.Atoi(backups)
+    }
+    
+    return go_logs.NewRotatingFileWriter(filename, maxSizeMB, maxBackups)
+}
+
+// Environment configuration:
+// LOG_FILE_PATH=/var/log/app.log
+// LOG_MAX_SIZE=100
+// LOG_MAX_BACKUPS=5
+```
+
+## Best Practices
+
+<Tip>
+**File Permissions**
+
+Log files are created with 0600 permissions (owner read/write only) for security:
+
+```go
+// Files created:
+app.log      # -rw------- (0600)
+app.log.1    # -rw------- (0600)
+```
+
+Parent directories are created with 0755 if needed.
+</Tip>
+
+<Tip>
+**Buffered Writes**
+
+RotatingFileWriter uses buffered I/O for performance. Remember to:
+
+```go
+defer writer.Close() // Flushes buffer on close
+
+// Or for critical logs:
+logger.Error("Critical error")
+writer.Sync() // Force flush to disk
+```
+</Tip>
+
+<Tip>
+**Choosing maxSizeMB**
+
+Balance between:
+- **Smaller files**: More frequent rotation, easier to handle
+- **Larger files**: Less rotation overhead, fewer files
+
+Typical values:
+- **Development**: 10-50 MB
+- **Production**: 100-500 MB
+- **High volume**: 500-1000 MB
+</Tip>
+
+<Tip>
+**Choosing maxBackups**
+
+Calculate total disk usage:
+```
+total_size = maxSizeMB * (maxBackups + 1)
+```
+
+Example:
+- maxSizeMB=100, maxBackups=10 → ~1.1 GB total
+- maxSizeMB=500, maxBackups=5 → ~3 GB total
+</Tip>
+
+<Warning>
+**Disk Space**
+
+Monitor available disk space:
+
+```go
+writer, err := go_logs.NewRotatingFileWriter("/var/log/app.log", 100, 10)
+if err != nil {
+    // Could fail if disk is full or permissions are wrong
+    return err
+}
+```
+
+Consider setting up alerts when disk usage is high.
+</Warning>
+
+<Warning>
+**Rotation During Write**
+
+Rotation is atomic per-write, but not across multiple writes:
+
+```go
+// These could go to different files if rotation happens between them
+logger.Info("Message 1") // Might trigger rotation
+logger.Info("Message 2") // Goes to new file
+```
+
+This is normal and expected behavior.
+</Warning>
+
+## Performance
+
+RotatingFileWriter is optimized for high throughput:
+
+**Benchmark results:**
+```
+BenchmarkRotatingFileWriter-8    16000000   65.8 ns/op   0 B/op   0 allocs/op
+```
+
+**Throughput:**
+- ~16 million messages per second
+- Zero allocations per write
+- Buffered I/O reduces syscalls
+
+## Thread Safety
+
+All methods are thread-safe:
+
+```go
+writer, _ := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+
+// Safe to call from multiple goroutines
+go logger1.Info("From goroutine 1")
+go logger2.Info("From goroutine 2")
+
+// Safe concurrent rotation
+go writer.Rotate()
+```
+
+Internal mutex ensures:
+- No interleaved writes
+- Safe rotation
+- Consistent state
+
+## Related
+
+- [MultiWriter](/api/writers/multi-writer) - Write to multiple destinations
+- [SamplingWriter](/api/writers/sampling) - Rate-limited writing
+- [Logger Options](/api/logger#options) - WithOutput option

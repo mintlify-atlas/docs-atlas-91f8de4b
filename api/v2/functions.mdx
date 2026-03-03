@@ -1,0 +1,286 @@
+---
+title: 'V2 Global Functions'
+description: 'Legacy global logging functions (backward compatible)'
+icon: 'globe'
+---
+
+## Overview
+
+The v2 API provides simple global logging functions for backward compatibility. These functions offer a quick way to log messages without creating a logger instance.
+
+<Note>
+  The v2 API is **legacy** and maintained for backward compatibility. For new code, consider using the [v3 Logger API](/core/logger) which provides structured logging, multiple formatters, and better performance.
+</Note>
+
+## Functions
+
+### InfoLog
+
+Logs an informational message.
+
+```go
+func InfoLog(message string)
+```
+
+**Parameters:**
+- `message` - The informational message to log
+
+**Behavior:**
+- Displays message in **yellow** color to terminal
+- Saves to log file if `SAVE_LOG_FILE=1`
+- Sends to Slack if `NOTIFICATION_INFO_LOG=1`
+
+**Example:**
+
+```go
+go_logs.InfoLog("Server started on port 8080")
+```
+
+**Environment Variables:**
+- `SAVE_LOG_FILE` - Enable file logging (0 or 1)
+- `NOTIFICATION_INFO_LOG` - Enable Slack notifications (0 or 1)
+
+**Source Reference:** `logs.go:54-74`
+
+---
+
+### ErrorLog
+
+Logs an error message.
+
+```go
+func ErrorLog(message string)
+```
+
+**Parameters:**
+- `message` - The error message to log
+
+**Behavior:**
+- Displays message in **red** color to terminal
+- Saves to log file if `SAVE_LOG_FILE=1`
+- Sends to Slack if `NOTIFICATION_ERROR_LOG=1`
+
+**Example:**
+
+```go
+go_logs.ErrorLog("Failed to connect to database")
+```
+
+**Environment Variables:**
+- `SAVE_LOG_FILE` - Enable file logging (0 or 1)
+- `NOTIFICATION_ERROR_LOG` - Enable Slack notifications (0 or 1)
+
+**Source Reference:** `logs.go:32-52`
+
+---
+
+### WarningLog
+
+Logs a warning message.
+
+```go
+func WarningLog(message string)
+```
+
+**Parameters:**
+- `message` - The warning message to log
+
+**Behavior:**
+- Displays message in **yellow** color to terminal
+- Saves to log file if `SAVE_LOG_FILE=1`
+- Sends to Slack if `NOTIFICATION_WARNING_LOG=1`
+
+**Example:**
+
+```go
+go_logs.WarningLog("Database connection pool nearly exhausted")
+```
+
+**Environment Variables:**
+- `SAVE_LOG_FILE` - Enable file logging (0 or 1)
+- `NOTIFICATION_WARNING_LOG` - Enable Slack notifications (0 or 1)
+
+**Source Reference:** `api.go:267-291`
+
+<Note>
+  This function was previously missing from the API, even though the `notificationLogWarning` configuration variable was loaded. It has been added to provide complete logging level support.
+</Note>
+
+---
+
+### SuccessLog
+
+Logs a success message.
+
+```go
+func SuccessLog(message string)
+```
+
+**Parameters:**
+- `message` - The success message to log
+
+**Behavior:**
+- Displays message in **green** color to terminal
+- Saves to log file if `SAVE_LOG_FILE=1`
+- Sends to Slack if `NOTIFICATION_SUCCESS_LOG=1`
+
+**Example:**
+
+```go
+go_logs.SuccessLog("Operation completed successfully")
+```
+
+**Environment Variables:**
+- `SAVE_LOG_FILE` - Enable file logging (0 or 1)
+- `NOTIFICATION_SUCCESS_LOG` - Enable Slack notifications (0 or 1)
+
+**Source Reference:** `logs.go:76-96`
+
+---
+
+### FatalLog
+
+Logs a fatal message and terminates the program.
+
+```go
+func FatalLog(message string)
+```
+
+**Parameters:**
+- `message` - The fatal message to log
+
+**Behavior:**
+- Displays message in **red** color with bomb emoji (💣) to terminal
+- Saves to log file if `SAVE_LOG_FILE=1`
+- Sends to Slack if `NOTIFICATION_FATAL_LOG=1`
+- **Terminates the program** by calling `log.Fatal()`
+
+**Example:**
+
+```go
+go_logs.FatalLog("Database connection failed")
+// Program exits here
+```
+
+**Environment Variables:**
+- `SAVE_LOG_FILE` - Enable file logging (0 or 1)
+- `NOTIFICATION_FATAL_LOG` - Enable Slack notifications (0 or 1)
+
+<Warning>
+  This function calls `log.Fatal()` which terminates the program with `os.Exit(1)`. Use only for unrecoverable errors.
+</Warning>
+
+**Source Reference:** `logs.go:8-30`
+
+---
+
+## Usage Examples
+
+### Basic Logging
+
+```go
+package main
+
+import "github.com/drossan/go_logs"
+
+func main() {
+    go_logs.InfoLog("Application starting")
+    
+    if err := connectDB(); err != nil {
+        go_logs.ErrorLog("Failed to connect to database")
+        return
+    }
+    
+    go_logs.SuccessLog("Database connected")
+}
+```
+
+### Error Handling
+
+```go
+func processFile(path string) error {
+    data, err := os.ReadFile(path)
+    if err != nil {
+        go_logs.ErrorLog(fmt.Sprintf("Failed to read file: %v", err))
+        return err
+    }
+    
+    go_logs.InfoLog("File processed successfully")
+    return nil
+}
+```
+
+### Fatal Errors
+
+```go
+func initApp() {
+    config, err := loadConfig()
+    if err != nil {
+        go_logs.FatalLog("Cannot start without configuration")
+        // Program exits here
+    }
+    // This line only executes if config loaded successfully
+}
+```
+
+## Color Output
+
+The v2 API uses the `fatih/color` package to provide colored terminal output:
+
+| Function | Color | Emoji |
+|----------|-------|-------|
+| `InfoLog` | Yellow | - |
+| `ErrorLog` | Red | - |
+| `WarningLog` | Yellow | - |
+| `SuccessLog` | Green | - |
+| `FatalLog` | Red | 💣 |
+
+## File Logging
+
+When `SAVE_LOG_FILE=1`, all log messages are written to a file:
+
+```bash
+export SAVE_LOG_FILE=1
+export LOG_FILE_NAME=app.log
+export LOG_FILE_PATH=/var/log
+```
+
+```go
+go_logs.InfoLog("This will be written to /var/log/app.log")
+```
+
+## Slack Notifications
+
+Enable Slack notifications for specific log levels:
+
+```bash
+export SLACK_TOKEN=xoxb-your-token
+export SLACK_CHANNEL_ID=C123456
+export NOTIFICATION_ERROR_LOG=1
+export NOTIFICATION_FATAL_LOG=1
+```
+
+```go
+go_logs.ErrorLog("This error will be sent to Slack")
+```
+
+## Migration to V3
+
+The v2 API is simple but lacks structured logging. Consider migrating to v3:
+
+**V2 (Legacy):**
+```go
+go_logs.InfoLog("User login: user-123")
+```
+
+**V3 (Recommended):**
+```go
+logger.Info("User login", go_logs.String("user_id", "user-123"))
+```
+
+See the [Migration Guide](/advanced/migration) for details.
+
+## Related API
+
+- [V2 Formatted Functions](/api/v2/formatted) - `Infof`, `Errorf`, etc.
+- [V2 Context Functions](/api/v2/context) - `InfoLogCtx`, `ErrorLogCtx`, etc.

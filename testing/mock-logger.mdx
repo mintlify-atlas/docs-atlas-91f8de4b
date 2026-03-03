@@ -1,0 +1,391 @@
+---
+title: MockLogger
+description: Mock implementation of Logger interface for unit testing
+---
+
+## Overview
+
+MockLogger is a complete implementation of the `Logger` interface designed specifically for unit testing. It captures all log entries in memory, allowing you to inspect and assert on logging behavior without writing to actual outputs.
+
+## Creating a MockLogger
+
+```go
+package myapp
+
+import (
+    "testing"
+    "github.com/drossan/go_logs"
+)
+
+func TestMyFunction(t *testing.T) {
+    // Create mock logger with default Info level
+    mock := go_logs.NewMockLogger()
+    
+    // Use it like any other logger
+    mock.Info("test message", go_logs.String("key", "value"))
+    
+    // Inspect captured entries
+    if mock.Count() != 1 {
+        t.Errorf("expected 1 log entry, got %d", mock.Count())
+    }
+}
+```
+
+## API Reference
+
+### Creation
+
+<ParamField path="NewMockLogger()" type="*MockLogger">
+  Creates a new MockLogger with:
+  - Default level: `InfoLevel`
+  - Empty entries list
+  - Thread-safe mutex protection
+</ParamField>
+
+### Logging Methods
+
+MockLogger implements all standard Logger methods:
+
+```go
+mock.Log(level Level, msg string, fields ...Field)
+mock.LogCtx(ctx context.Context, level Level, msg string, fields ...Field)
+
+mock.Trace(msg string, fields ...Field)
+mock.Debug(msg string, fields ...Field)
+mock.Info(msg string, fields ...Field)
+mock.Warn(msg string, fields ...Field)
+mock.Error(msg string, fields ...Field)
+mock.Fatal(msg string, fields ...Field)  // Does NOT exit in mock
+
+mock.With(fields ...Field) Logger
+mock.SetLevel(level Level)
+mock.GetLevel() Level
+mock.Sync() error  // No-op, returns nil
+```
+
+<Note>
+  `Fatal()` does NOT call `os.Exit(1)` in MockLogger. It simply logs at Fatal level for testing purposes.
+</Note>
+
+### Inspection Methods
+
+#### Count()
+
+Returns the total number of captured log entries:
+
+```go
+mock := go_logs.NewMockLogger()
+mock.Info("message 1")
+mock.Error("message 2")
+
+if mock.Count() != 2 {
+    t.Errorf("expected 2 entries, got %d", mock.Count())
+}
+```
+
+#### Entries()
+
+Returns all captured entries as a slice:
+
+```go
+entries := mock.Entries()
+
+for _, entry := range entries {
+    fmt.Printf("Level: %v, Message: %s\n", entry.Level, entry.Message)
+    
+    // Inspect fields
+    for _, field := range entry.Fields {
+        fmt.Printf("  %s = %v\n", field.Key, field.Value)
+    }
+}
+```
+
+<ParamField path="MockEntry" type="struct">
+  Each entry contains:
+  - `Level` - The log level (Trace, Debug, Info, etc.)
+  - `Message` - The log message string
+  - `Fields` - Slice of structured fields
+</ParamField>
+
+#### LastEntry()
+
+Returns the most recent log entry, or nil if no entries:
+
+```go
+mock.Info("first")
+mock.Error("second")
+
+last := mock.LastEntry()
+if last == nil {
+    t.Fatal("expected an entry")
+}
+
+if last.Message != "second" {
+    t.Errorf("expected 'second', got %s", last.Message)
+}
+
+if last.Level != go_logs.ErrorLevel {
+    t.Error("expected Error level")
+}
+```
+
+#### HasMessage()
+
+Checks if any entry contains the exact message:
+
+```go
+mock.Info("user logged in")
+mock.Error("connection failed")
+
+if !mock.HasMessage("user logged in") {
+    t.Error("expected 'user logged in' message")
+}
+
+if mock.HasMessage("not logged") {
+    t.Error("should not have partial match")
+}
+```
+
+<Warning>
+  `HasMessage()` requires an exact match, not substring matching.
+</Warning>
+
+#### HasLevel()
+
+Checks if any entry has the specified level:
+
+```go
+mock.Info("info message")
+mock.Error("error message")
+
+if !mock.HasLevel(go_logs.ErrorLevel) {
+    t.Error("expected at least one Error level log")
+}
+
+if mock.HasLevel(go_logs.FatalLevel) {
+    t.Error("should not have Fatal level logs")
+}
+```
+
+#### Reset()
+
+Clears all captured entries:
+
+```go
+mock.Info("message 1")
+mock.Info("message 2")
+assert.Equal(t, 2, mock.Count())
+
+mock.Reset()
+
+assert.Equal(t, 0, mock.Count())
+assert.Nil(t, mock.LastEntry())
+```
+
+## Level Filtering
+
+MockLogger respects level filtering just like real loggers:
+
+```go
+mock := go_logs.NewMockLogger()
+mock.SetLevel(go_logs.WarnLevel) // Only Warn and above
+
+mock.Debug("debug message")  // Filtered out
+mock.Info("info message")    // Filtered out
+mock.Warn("warn message")    // Captured
+mock.Error("error message")  // Captured
+
+assert.Equal(t, 2, mock.Count()) // Only Warn and Error
+```
+
+## Testing Examples
+
+### Example 1: Verify Error Logging
+
+```go
+func TestDatabaseConnection(t *testing.T) {
+    mock := go_logs.NewMockLogger()
+    db := NewDatabase(mock)
+    
+    err := db.Connect("invalid-host:3306")
+    
+    // Verify error was logged
+    if !mock.HasLevel(go_logs.ErrorLevel) {
+        t.Error("connection failure should log error")
+    }
+    
+    last := mock.LastEntry()
+    if !strings.Contains(last.Message, "connection") {
+        t.Error("error message should mention connection")
+    }
+}
+```
+
+### Example 2: Verify Fields Are Logged
+
+```go
+func TestUserActivity(t *testing.T) {
+    mock := go_logs.NewMockLogger()
+    tracker := NewActivityTracker(mock)
+    
+    tracker.RecordLogin("john@example.com", "192.168.1.100")
+    
+    entries := mock.Entries()
+    if len(entries) != 1 {
+        t.Fatalf("expected 1 entry, got %d", len(entries))
+    }
+    
+    entry := entries[0]
+    
+    // Verify fields
+    hasEmail := false
+    hasIP := false
+    
+    for _, field := range entry.Fields {
+        if field.Key == "email" && field.Value == "john@example.com" {
+            hasEmail = true
+        }
+        if field.Key == "ip" && field.Value == "192.168.1.100" {
+            hasIP = true
+        }
+    }
+    
+    if !hasEmail {
+        t.Error("expected email field")
+    }
+    if !hasIP {
+        t.Error("expected ip field")
+    }
+}
+```
+
+### Example 3: Test Structured Logging
+
+```go
+func TestOrderProcessing(t *testing.T) {
+    mock := go_logs.NewMockLogger()
+    mock.SetLevel(go_logs.DebugLevel) // Capture everything
+    
+    processor := NewOrderProcessor(mock)
+    order := &Order{ID: 12345, Total: 99.99}
+    
+    processor.Process(order)
+    
+    // Verify logging sequence
+    entries := mock.Entries()
+    
+    if len(entries) < 2 {
+        t.Fatal("expected multiple log entries")
+    }
+    
+    // First log should be Debug level
+    if entries[0].Level != go_logs.DebugLevel {
+        t.Error("first log should be Debug")
+    }
+    
+    // Last log should confirm processing
+    if !mock.HasMessage("order processed") {
+        t.Error("expected 'order processed' message")
+    }
+}
+```
+
+### Example 4: Test Child Logger
+
+```go
+func TestChildLogger(t *testing.T) {
+    parent := go_logs.NewMockLogger()
+    
+    // Create child logger (returns same mock for simplicity)
+    child := parent.With(
+        go_logs.String("request_id", "abc-123"),
+    )
+    
+    child.Info("processing request")
+    
+    // Verify log was captured
+    if parent.Count() != 1 {
+        t.Error("child logs should be captured by parent mock")
+    }
+}
+```
+
+<Note>
+  MockLogger's `With()` method returns the same mock instance for simplicity. If you need to track child logger calls separately, consider using multiple mock instances.
+</Note>
+
+### Example 5: Verify No Logs
+
+```go
+func TestCaching(t *testing.T) {
+    mock := go_logs.NewMockLogger()
+    cache := NewCache(mock)
+    
+    // Cache hit should not log anything
+    value := cache.Get("existing-key")
+    
+    if mock.Count() != 0 {
+        t.Error("cache hit should not log")
+    }
+    
+    // Cache miss should log
+    value = cache.Get("missing-key")
+    
+    if mock.Count() != 1 {
+        t.Error("cache miss should log once")
+    }
+}
+```
+
+## Thread Safety
+
+MockLogger is fully thread-safe and can be used in concurrent tests:
+
+```go
+func TestConcurrentLogging(t *testing.T) {
+    mock := go_logs.NewMockLogger()
+    
+    var wg sync.WaitGroup
+    goroutines := 10
+    logsPerGoroutine := 100
+    
+    for i := 0; i < goroutines; i++ {
+        wg.Add(1)
+        go func(id int) {
+            defer wg.Done()
+            for j := 0; j < logsPerGoroutine; j++ {
+                mock.Info("concurrent log",
+                    go_logs.Int("goroutine", id),
+                    go_logs.Int("iteration", j),
+                )
+            }
+        }(i)
+    }
+    
+    wg.Wait()
+    
+    expected := goroutines * logsPerGoroutine
+    if mock.Count() != expected {
+        t.Errorf("expected %d logs, got %d", expected, mock.Count())
+    }
+}
+```
+
+## Source Code Reference
+
+MockLogger implementation: `testing.go:136-291`
+
+<Card title="View Full Implementation" icon="github" href="https://github.com/drossan/go_logs/blob/main/testing.go#L136-L291">
+  See the complete MockLogger source code
+</Card>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="CaptureBuffer" icon="inbox" href="/testing/capture-buffer">
+    For capturing raw log output
+  </Card>
+  <Card title="Testing Overview" icon="flask" href="/testing/overview">
+    Testing best practices
+  </Card>
+</CardGroup>

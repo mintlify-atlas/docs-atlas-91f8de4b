@@ -1,0 +1,514 @@
+---
+title: 'OpenTelemetry Integration'
+description: 'Export logs to OpenTelemetry collectors using OTLP protocol'
+icon: 'chart-network'
+---
+
+## Basic OTLP Hook
+
+Send logs to an OpenTelemetry collector:
+
+```go
+package main
+
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/otel"
+)
+
+func main() {
+    // Create OTLP hook
+    otelHook := otel.NewOTLPHook("http://localhost:4318/v1/logs")
+    defer otelHook.Close()
+    
+    // Create logger with OTLP hook
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHook(otelHook),
+    )
+    
+    logger.Info("Application started",
+        go_logs.String("version", "1.0.0"),
+    )
+    
+    logger.Error("Database connection failed",
+        go_logs.String("host", "db.example.com"),
+        go_logs.Int("port", 5432),
+    )
+}
+```
+
+## Advanced OTLP Configuration
+
+Configure OTLP exporter with custom settings:
+
+```go
+package main
+
+import (
+    "time"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/otel"
+)
+
+func main() {
+    // Create OTLP exporter with custom configuration
+    exporter := otel.NewOTLPExporterWithConfig(otel.OTLPConfig{
+        Endpoint:      "http://otel-collector:4318/v1/logs",
+        Headers:       map[string]string{
+            "Authorization": "Bearer your-token-here",
+            "X-Tenant-ID":   "production",
+        },
+        MaxPending:    1000,              // Buffer up to 1000 entries
+        FlushInterval: 5 * time.Second,   // Flush every 5 seconds
+        Timeout:       30 * time.Second,  // HTTP timeout
+    })
+    
+    // Create hook with custom min level
+    hook := otel.NewOTLPHookWithExporter(exporter, go_logs.InfoLevel)
+    defer hook.Close()
+    
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.DebugLevel),
+        go_logs.WithHook(hook),
+    )
+    
+    // Debug logs won't be sent to OTLP (below InfoLevel)
+    logger.Debug("Debug information")
+    
+    // These will be sent to OTLP collector
+    logger.Info("Service started")
+    logger.Error("An error occurred")
+}
+```
+
+## OpenTelemetry Collector Configuration
+
+Configure the OTLP collector to receive logs:
+
+```yaml
+# otel-collector-config.yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1000
+  
+  resource:
+    attributes:
+      - key: service.name
+        value: payment-api
+        action: upsert
+  
+  attributes:
+    actions:
+      - key: environment
+        value: production
+        action: insert
+
+exporters:
+  # Export to Jaeger
+  jaeger:
+    endpoint: jaeger:14250
+    tls:
+      insecure: true
+  
+  # Export to Prometheus
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+  
+  # Export to Loki
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+  
+  # Debug output
+  logging:
+    loglevel: debug
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch, resource, attributes]
+      exporters: [loki, logging]
+    
+    traces:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [jaeger]
+    
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+```
+
+## Distributed Tracing with OpenTelemetry
+
+Integrate logs with distributed traces:
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/otel"
+)
+
+func main() {
+    // Setup OTLP hook
+    otelHook := otel.NewOTLPHook("http://localhost:4318/v1/logs")
+    defer otelHook.Close()
+    
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHook(otelHook),
+        go_logs.WithCaller(true),  // Include caller info
+    )
+    
+    // Create trace context
+    ctx := context.Background()
+    traceID := "trace-" + generateID()
+    spanID := "span-" + generateID()
+    
+    ctx = go_logs.WithTraceID(ctx, traceID)
+    ctx = go_logs.WithSpanID(ctx, spanID)
+    
+    // Log with trace context
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Processing payment",
+        go_logs.String("transaction_id", "tx-12345"),
+        go_logs.Float64("amount", 99.99),
+    )
+    
+    // Nested span
+    processPayment(ctx, logger)
+}
+
+func processPayment(ctx context.Context, logger go_logs.Logger) {
+    // Create child span
+    spanID := "span-" + generateID()
+    ctx = go_logs.WithSpanID(ctx, spanID)
+    
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Validating payment method")
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Charging card")
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Payment completed")
+}
+
+func generateID() string {
+    return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+```
+
+## Service-Level Logging with OpenTelemetry
+
+Create a standardized logger for microservices:
+
+```go
+package logging
+
+import (
+    "os"
+    "time"
+    
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/async"
+    "github.com/drossan/go_logs/otel"
+)
+
+type Config struct {
+    ServiceName    string
+    ServiceVersion string
+    Environment    string
+    OTLPEndpoint   string
+    LogLevel       go_logs.Level
+}
+
+func NewServiceLogger(cfg Config) (go_logs.Logger, error) {
+    // Create OTLP exporter
+    exporter := otel.NewOTLPExporterWithConfig(otel.OTLPConfig{
+        Endpoint:      cfg.OTLPEndpoint,
+        MaxPending:    1000,
+        FlushInterval: 5 * time.Second,
+        Headers: map[string]string{
+            "X-Service-Name": cfg.ServiceName,
+        },
+    })
+    
+    otelHook := otel.NewOTLPHookWithExporter(exporter, go_logs.InfoLevel)
+    
+    // Create base logger
+    syncLogger, err := go_logs.New(
+        go_logs.WithLevel(cfg.LogLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithHook(otelHook),
+        go_logs.WithCaller(true),
+        go_logs.WithCommonRedaction(),
+    )
+    if err != nil {
+        return nil, err
+    }
+    
+    // Wrap with async logger
+    asyncLogger := async.Wrap(syncLogger, 10000)
+    
+    // Add service metadata
+    hostname, _ := os.Hostname()
+    
+    serviceLogger := asyncLogger.With(
+        go_logs.String("service.name", cfg.ServiceName),
+        go_logs.String("service.version", cfg.ServiceVersion),
+        go_logs.String("service.environment", cfg.Environment),
+        go_logs.String("host.name", hostname),
+    )
+    
+    return serviceLogger, nil
+}
+```
+
+## Multi-Backend Export
+
+Send logs to multiple backends simultaneously:
+
+```go
+package main
+
+import (
+    "github.com/drossan/go_logs"
+    "github.com/drossan/go_logs/otel"
+    "github.com/drossan/go_logs/hooks"
+)
+
+func main() {
+    // OTLP hook for OpenTelemetry
+    otelHook := otel.NewOTLPHook("http://otel-collector:4318/v1/logs")
+    defer otelHook.Close()
+    
+    // Slack hook for critical errors
+    slackNotifier, _ := adapters.NewSlackNotifier()
+    slackHook := hooks.NewSlackHook(slackNotifier, go_logs.ErrorLevel)
+    
+    // Logger with multiple hooks
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithHooks(otelHook, slackHook),
+        go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+    )
+    
+    // Info goes to: file + OTLP
+    logger.Info("Request processed")
+    
+    // Error goes to: file + OTLP + Slack
+    logger.Error("Payment failed")
+}
+```
+
+## Docker Compose with OTLP Collector
+
+Deploy your application with OpenTelemetry collector:
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # Prometheus metrics
+  
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "14250:14250" # gRPC
+  
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+  
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - loki
+      - jaeger
+  
+  app:
+    build: .
+    environment:
+      - OTLP_ENDPOINT=http://otel-collector:4318/v1/logs
+      - LOG_LEVEL=info
+    ports:
+      - "8080:8080"
+    depends_on:
+      - otel-collector
+```
+
+**Start the stack:**
+```bash
+docker-compose up -d
+
+# Access Jaeger UI: http://localhost:16686
+# Access Grafana: http://localhost:3000
+```
+
+## Grafana Dashboard for Logs
+
+Query logs in Grafana using Loki:
+
+```promql
+# Show all error logs
+{service_name="payment-api"} |= "ERROR"
+
+# Filter by trace ID
+{service_name="payment-api"} | json | trace_id="trace-abc-123"
+
+# Count errors per minute
+sum(rate({service_name="payment-api"} |= "ERROR" [1m])) by (service_name)
+
+# Slow requests (duration > 1s)
+{service_name="payment-api"} | json | duration_ms > 1000
+```
+
+## Complete Production Example
+
+```go
+package main
+
+import (
+    "context"
+    "net/http"
+    "os"
+    "time"
+    
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Initialize logger with OpenTelemetry
+    logger, err := NewServiceLogger(Config{
+        ServiceName:    "payment-api",
+        ServiceVersion: "1.2.3",
+        Environment:    os.Getenv("ENVIRONMENT"),
+        OTLPEndpoint:   os.Getenv("OTLP_ENDPOINT"),
+        LogLevel:       go_logs.InfoLevel,
+    })
+    if err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+    
+    logger.Info("Service starting")
+    
+    // Setup HTTP server
+    http.HandleFunc("/api/payment", func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
+        
+        // Create trace context
+        traceID := r.Header.Get("X-Trace-ID")
+        if traceID == "" {
+            traceID = generateTraceID()
+        }
+        ctx := go_logs.WithTraceID(r.Context(), traceID)
+        
+        // Request logger with trace context
+        reqLogger := logger.With(
+            go_logs.String("http.method", r.Method),
+            go_logs.String("http.path", r.URL.Path),
+            go_logs.String("trace_id", traceID),
+        )
+        
+        reqLogger.LogCtx(ctx, go_logs.InfoLevel, "Request received")
+        
+        // Process request
+        statusCode := handlePayment(ctx, reqLogger)
+        
+        duration := time.Since(start).Milliseconds()
+        
+        // Log completion
+        reqLogger.LogCtx(ctx, go_logs.InfoLevel, "Request completed",
+            go_logs.Int("http.status_code", statusCode),
+            go_logs.Float64("http.duration_ms", float64(duration)),
+        )
+        
+        w.WriteHeader(statusCode)
+    })
+    
+    logger.Info("Service ready",
+        go_logs.Int("port", 8080),
+    )
+    
+    http.ListenAndServe(":8080", nil)
+}
+
+func handlePayment(ctx context.Context, logger go_logs.Logger) int {
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Validating payment")
+    logger.LogCtx(ctx, go_logs.InfoLevel, "Processing payment")
+    return http.StatusOK
+}
+```
+
+## Monitoring and Alerts
+
+Set up alerts based on log metrics:
+
+```yaml
+# Prometheus alert rules
+groups:
+  - name: application_logs
+    interval: 30s
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate({service_name="payment-api"} |= "ERROR" [5m])) > 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate detected"
+          description: "Service {{ $labels.service_name }} has high error rate"
+      
+      - alert: SlowRequests
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate({service_name="payment-api"} | json | __error__="" [5m])) by (le)
+          ) > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow requests detected"
+          description: "95th percentile latency > 1s"
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="ELK Stack" icon="chart-line" href="/examples/elk-stack">
+    Traditional ELK stack integration
+  </Card>
+  <Card title="Production Setup" icon="rocket" href="/examples/production-setup">
+    Complete production deployment guide
+  </Card>
+</CardGroup>

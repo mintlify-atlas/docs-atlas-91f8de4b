@@ -1,0 +1,393 @@
+---
+title: HTTP Endpoints
+description: Dynamic log level control via HTTP endpoints for production debugging
+---
+
+The `http` module provides HTTP endpoints for runtime log level control. This is essential for debugging production issues without redeploying your application.
+
+## Features
+
+- **GET /log-level** - Get current log level
+- **PUT /log-level** - Set log level dynamically
+- **GET /log-level/metrics** - Get logging metrics
+- **Bearer token authentication** for security
+- **Rate limiting** to prevent abuse
+- **IP whitelisting** (exact IPs and CIDR ranges)
+
+## Installation
+
+```bash
+go get github.com/drossan/go_logs/http
+```
+
+## Basic Usage
+
+```go
+import (
+    "net/http"
+    
+    "github.com/drossan/go_logs"
+    httplogs "github.com/drossan/go_logs/http"
+)
+
+func main() {
+    // Create logger
+    logger, _ := go_logs.New(go_logs.WithLevel(go_logs.InfoLevel))
+
+    // Create HTTP handler
+    handler := httplogs.NewDynamicLevelHandler(logger, httplogs.Config{
+        Endpoint:  "/debug/level",
+        AuthToken: "secret-token-123",
+    })
+
+    // Register handler
+    http.Handle("/debug/", handler)
+    
+    // Start server
+    http.ListenAndServe(":8080", nil)
+}
+```
+
+## Configuration
+
+```go
+type Config struct {
+    // Endpoint is the base path for the handler (default: "/log-level")
+    Endpoint string
+
+    // AuthToken is the Bearer token for authentication (optional)
+    AuthToken string
+
+    // RateLimit is the maximum requests per second (0 = unlimited)
+    RateLimit int
+
+    // AllowedIPs is a list of allowed IPs or CIDR ranges (empty = all allowed)
+    AllowedIPs []string
+}
+```
+
+### Security Configuration
+
+```go
+config := httplogs.Config{
+    Endpoint:   "/admin/log-level",
+    AuthToken:  os.Getenv("LOG_ADMIN_TOKEN"),
+    RateLimit:  10, // 10 requests per minute per IP
+    AllowedIPs: []string{
+        "10.0.0.0/8",      // Internal network
+        "192.168.1.100",   // Specific admin IP
+    },
+}
+
+handler := httplogs.NewDynamicLevelHandler(logger, config)
+```
+
+## API Endpoints
+
+### GET /log-level
+
+Get the current log level.
+
+**Request:**
+```bash
+curl -H "Authorization: Bearer secret-token-123" \
+     http://localhost:8080/debug/level
+```
+
+**Response:**
+```json
+{
+  "level": "INFO",
+  "timestamp": "2024-03-15T10:30:00Z"
+}
+```
+
+### PUT /log-level
+
+Set a new log level.
+
+**Request:**
+```bash
+curl -X PUT \
+     -H "Authorization: Bearer secret-token-123" \
+     -H "Content-Type: application/json" \
+     -d '{"level": "debug"}' \
+     http://localhost:8080/debug/level
+```
+
+**Response:**
+```json
+{
+  "level": "DEBUG",
+  "timestamp": "2024-03-15T10:31:00Z"
+}
+```
+
+**Valid levels:**
+- `trace`
+- `debug`
+- `info`
+- `warn` or `warning`
+- `error`
+- `fatal`
+- `silent`
+
+### GET /log-level/metrics
+
+Get logging metrics.
+
+**Request:**
+```bash
+curl -H "Authorization: Bearer secret-token-123" \
+     http://localhost:8080/debug/level/metrics
+```
+
+**Response:**
+```json
+{
+  "total": 15420,
+  "by_level": {
+    "DEBUG": 8234,
+    "INFO": 5012,
+    "WARN": 1890,
+    "ERROR": 284
+  },
+  "dropped": 12
+}
+```
+
+## Security Features
+
+### Authentication
+
+Bearer token authentication protects endpoints:
+
+```go
+config := httplogs.Config{
+    Endpoint:  "/admin/log-level",
+    AuthToken: "your-secret-token",
+}
+```
+
+**Without token:**
+```bash
+$ curl http://localhost:8080/admin/log-level
+{"error": "unauthorized"}
+```
+
+**With valid token:**
+```bash
+$ curl -H "Authorization: Bearer your-secret-token" \
+       http://localhost:8080/admin/log-level
+{"level": "INFO", "timestamp": "2024-03-15T10:30:00Z"}
+```
+
+### IP Whitelisting
+
+Restrict access to specific IPs or CIDR ranges:
+
+```go
+config := httplogs.Config{
+    Endpoint: "/admin/log-level",
+    AllowedIPs: []string{
+        "10.0.0.0/8",         // Entire private network
+        "172.16.0.0/12",      // Another private range
+        "192.168.1.100/32",   // Single IP
+        "203.0.113.50",       // Public IP (auto /32)
+    },
+}
+```
+
+**From blocked IP:**
+```bash
+$ curl http://localhost:8080/admin/log-level
+{"error": "IP not allowed"}
+```
+
+### Rate Limiting
+
+Prevent abuse with per-IP rate limiting:
+
+```go
+config := httplogs.Config{
+    Endpoint:  "/admin/log-level",
+    RateLimit: 10, // 10 requests per minute per IP
+}
+```
+
+**After limit exceeded:**
+```bash
+$ curl http://localhost:8080/admin/log-level
+{"error": "rate limit exceeded"}
+```
+
+## Production Example
+
+```go
+package main
+
+import (
+    "fmt"
+    "net/http"
+    "os"
+
+    "github.com/drossan/go_logs"
+    httplogs "github.com/drossan/go_logs/http"
+)
+
+func main() {
+    // Create production logger
+    logger, err := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+    )
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Failed to create logger: %v\n", err)
+        os.Exit(1)
+    }
+
+    // Configure dynamic level endpoint with security
+    handler := httplogs.NewDynamicLevelHandler(logger, httplogs.Config{
+        Endpoint:   "/admin/log-level",
+        AuthToken:  os.Getenv("LOG_ADMIN_TOKEN"), // From env var
+        RateLimit:  10,
+        AllowedIPs: []string{
+            "10.0.0.0/8",      // Internal network only
+            "192.168.1.0/24",  // Admin subnet
+        },
+    })
+
+    // Register endpoints
+    http.Handle("/admin/", handler)
+
+    // Application endpoints
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        logger.Info("Request received",
+            go_logs.String("method", r.Method),
+            go_logs.String("path", r.URL.Path),
+        )
+        fmt.Fprintf(w, "Hello, World!")
+    })
+
+    // Start server
+    logger.Info("Server starting", go_logs.Int("port", 8080))
+    if err := http.ListenAndServe(":8080", nil); err != nil {
+        logger.Fatal("Server failed", go_logs.Err(err))
+    }
+}
+```
+
+## Kubernetes/Docker Example
+
+### Deployment Configuration
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: log-admin-token
+type: Opaque
+stringData:
+  token: "your-secure-token-here"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  template:
+    spec:
+      containers:
+      - name: app
+        image: myapp:latest
+        env:
+        - name: LOG_ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: log-admin-token
+              key: token
+        ports:
+        - containerPort: 8080
+          name: http
+```
+
+### Runtime Debugging
+
+```bash
+# Port-forward to pod
+kubectl port-forward deployment/myapp 8080:8080
+
+# Check current level
+curl -H "Authorization: Bearer $(kubectl get secret log-admin-token -o jsonpath='{.data.token}' | base64 -d)" \
+     http://localhost:8080/admin/log-level
+
+# Enable debug logging
+curl -X PUT \
+     -H "Authorization: Bearer $(kubectl get secret log-admin-token -o jsonpath='{.data.token}' | base64 -d)" \
+     -H "Content-Type: application/json" \
+     -d '{"level": "debug"}' \
+     http://localhost:8080/admin/log-level
+
+# Investigate issue...
+
+# Restore info level
+curl -X PUT \
+     -H "Authorization: Bearer $(kubectl get secret log-admin-token -o jsonpath='{.data.token}' | base64 -d)" \
+     -H "Content-Type: application/json" \
+     -d '{"level": "info"}' \
+     http://localhost:8080/admin/log-level
+```
+
+## Error Responses
+
+| Status | Error | Cause |
+|--------|-------|-------|
+| 401 | `unauthorized` | Missing or invalid Bearer token |
+| 403 | `IP not allowed` | Request IP not in AllowedIPs |
+| 429 | `rate limit exceeded` | Too many requests from IP |
+| 400 | `invalid JSON` | Malformed request body |
+| 400 | `invalid log level: xyz` | Unknown log level |
+| 405 | `method not allowed` | Wrong HTTP method |
+| 500 | `metrics not available` | Logger doesn't support metrics |
+
+## Best Practices
+
+### Security
+
+1. **Always use authentication** in production
+2. **Use environment variables** for tokens, never hardcode
+3. **Restrict IPs** to internal networks or VPN
+4. **Enable rate limiting** to prevent abuse
+5. **Use HTTPS** in production environments
+
+### Operations
+
+1. **Start with INFO** level by default
+2. **Enable DEBUG** only when investigating issues
+3. **Restore original level** after debugging
+4. **Monitor metrics** to track log volume
+5. **Document token location** for on-call engineers
+
+### Integration
+
+```go
+// Good: Combine with other middleware
+mux := http.NewServeMux()
+
+// Add logging endpoints
+mux.Handle("/admin/", httplogs.NewDynamicLevelHandler(logger, config))
+
+// Add other admin endpoints
+mux.HandleFunc("/admin/health", healthHandler)
+mux.HandleFunc("/admin/metrics", metricsHandler)
+
+// Wrap with authentication middleware
+http.ListenAndServe(":8080", authMiddleware(mux))
+```
+
+## See Also
+
+- [Core Logger](/core/logger) - Base logger interface
+- [Metrics](/advanced/metrics) - Understanding metrics data
+- [Security](/advanced/security) - Security best practices

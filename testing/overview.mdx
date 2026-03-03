@@ -1,0 +1,218 @@
+---
+title: Testing Overview
+description: Testing utilities and best practices for go_logs
+---
+
+## Testing Utilities
+
+go_logs provides comprehensive testing utilities to help you write tests that verify logging behavior in your applications. These utilities are located in `testing.go` and include:
+
+- **MockLogger** - A complete mock implementation of the Logger interface for unit testing
+- **CaptureBuffer** - A thread-safe buffer for capturing log output in tests
+
+## Why Testing Utilities?
+
+Testing logging behavior is important for:
+
+1. **Verifying Critical Logs** - Ensure important events are being logged
+2. **Debugging Test Failures** - Capture logs during test execution
+3. **Compliance** - Verify audit logs are generated correctly
+4. **Performance** - Test logging doesn't impact application performance
+
+## Quick Example
+
+```go
+func TestUserRegistration(t *testing.T) {
+    // Create mock logger
+    mock := go_logs.NewMockLogger()
+    
+    // Run your code with the mock
+    service := NewUserService(mock)
+    err := service.Register("john@example.com")
+    
+    // Verify logging behavior
+    if !mock.HasMessage("user registered") {
+        t.Error("expected registration log")
+    }
+    
+    if mock.Count() != 1 {
+        t.Errorf("expected 1 log, got %d", mock.Count())
+    }
+}
+```
+
+## Available Testing Tools
+
+<CardGroup cols={2}>
+  <Card title="MockLogger" icon="robot" href="/testing/mock-logger">
+    Full Logger implementation for unit tests with entry inspection
+  </Card>
+  <Card title="CaptureBuffer" icon="inbox" href="/testing/capture-buffer">
+    Thread-safe buffer for capturing and asserting on log output
+  </Card>
+</CardGroup>
+
+## Testing Best Practices
+
+### 1. Use Dependency Injection
+
+Inject the logger into your components rather than using global instances:
+
+```go
+type UserService struct {
+    logger go_logs.Logger
+}
+
+func NewUserService(logger go_logs.Logger) *UserService {
+    return &UserService{logger: logger}
+}
+```
+
+### 2. Test Critical Log Paths
+
+Focus on testing logs that indicate:
+- Errors and failures
+- Security events
+- Business-critical operations
+- Compliance/audit requirements
+
+```go
+func TestSecurityEvent(t *testing.T) {
+    mock := go_logs.NewMockLogger()
+    auth := NewAuthService(mock)
+    
+    auth.FailedLogin("admin", "192.168.1.100")
+    
+    // Verify security log was created
+    if !mock.HasLevel(go_logs.WarnLevel) {
+        t.Error("failed login should log warning")
+    }
+}
+```
+
+### 3. Verify Log Levels
+
+Ensure logs use appropriate severity levels:
+
+```go
+func TestLogLevels(t *testing.T) {
+    mock := go_logs.NewMockLogger()
+    mock.SetLevel(go_logs.DebugLevel) // Capture all levels
+    
+    service := NewPaymentService(mock)
+    service.ProcessPayment(payment)
+    
+    entries := mock.Entries()
+    
+    // Verify error conditions log at Error level
+    for _, entry := range entries {
+        if strings.Contains(entry.Message, "failed") {
+            if entry.Level != go_logs.ErrorLevel {
+                t.Error("failures should use Error level")
+            }
+        }
+    }
+}
+```
+
+### 4. Test Concurrent Logging
+
+Verify thread-safety when logging from multiple goroutines:
+
+```go
+func TestConcurrentLogging(t *testing.T) {
+    mock := go_logs.NewMockLogger()
+    
+    var wg sync.WaitGroup
+    for i := 0; i < 100; i++ {
+        wg.Add(1)
+        go func(id int) {
+            defer wg.Done()
+            mock.Info("goroutine log", go_logs.Int("id", id))
+        }(i)
+    }
+    
+    wg.Wait()
+    
+    if mock.Count() != 100 {
+        t.Errorf("expected 100 logs, got %d", mock.Count())
+    }
+}
+```
+
+### 5. Clean Up Between Tests
+
+Reset mocks to avoid test pollution:
+
+```go
+func TestMultipleScenarios(t *testing.T) {
+    mock := go_logs.NewMockLogger()
+    
+    t.Run("scenario 1", func(t *testing.T) {
+        service.DoSomething()
+        assert.Equal(t, 1, mock.Count())
+        mock.Reset() // Clean up
+    })
+    
+    t.Run("scenario 2", func(t *testing.T) {
+        service.DoSomethingElse()
+        assert.Equal(t, 1, mock.Count()) // Starts fresh
+    })
+}
+```
+
+## Integration Testing
+
+For integration tests, use `CaptureBuffer` to verify actual log output:
+
+```go
+func TestIntegration(t *testing.T) {
+    buf := go_logs.NewCaptureBuffer()
+    logger, _ := go_logs.New(
+        go_logs.WithOutput(buf),
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    )
+    
+    // Run integration test
+    app := NewApp(logger)
+    app.Start()
+    
+    // Verify logs contain expected output
+    if !buf.Contains("application started") {
+        t.Error("expected startup log")
+    }
+    
+    if buf.LineCount() < 1 {
+        t.Error("expected at least one log line")
+    }
+}
+```
+
+## Performance Testing
+
+Use benchmarks to verify logging overhead:
+
+```go
+func BenchmarkLogging(b *testing.B) {
+    mock := go_logs.NewMockLogger()
+    
+    b.ResetTimer()
+    for i := 0; i < b.N; i++ {
+        mock.Info("benchmark message",
+            go_logs.String("key", "value"),
+            go_logs.Int("count", i),
+        )
+    }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="MockLogger" icon="robot" href="/testing/mock-logger">
+    Learn about MockLogger API and examples
+  </Card>
+  <Card title="CaptureBuffer" icon="inbox" href="/testing/capture-buffer">
+    Learn about CaptureBuffer utilities
+  </Card>
+</CardGroup>

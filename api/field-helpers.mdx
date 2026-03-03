@@ -1,0 +1,218 @@
+---
+title: 'Field Helper Functions'
+description: 'Type-safe helper functions for creating structured log fields'
+---
+
+## Overview
+
+Field helper functions provide a convenient and type-safe way to create structured log fields. These functions are zero-allocation and designed for efficient logging.
+
+## String
+
+Creates a Field with a string value. This is the most common field type for log messages.
+
+```go
+func String(key, val string) Field
+```
+
+<ParamField path="key" type="string" required>
+  The field key
+</ParamField>
+
+<ParamField path="val" type="string" required>
+  The string value
+</ParamField>
+
+**Returns:** A `Field` with type `StringType`.
+
+### Example
+
+```go
+logger.Info("User logged in",
+    go_logs.String("username", "john"),
+    go_logs.String("ip", "192.168.1.1"))
+```
+
+---
+
+## Int
+
+Creates a Field with an int value. Useful for numeric data like counts, IDs, ports, etc.
+
+```go
+func Int(key string, val int) Field
+```
+
+<ParamField path="key" type="string" required>
+  The field key
+</ParamField>
+
+<ParamField path="val" type="int" required>
+  The integer value
+</ParamField>
+
+**Returns:** A `Field` with type `IntType`.
+
+### Example
+
+```go
+logger.Info("Request processed",
+    go_logs.Int("status_code", 200),
+    go_logs.Int("response_time_ms", 45))
+```
+
+---
+
+## Int64
+
+Creates a Field with an int64 value. Use this for large integers or when you need explicit 64-bit precision.
+
+```go
+func Int64(key string, val int64) Field
+```
+
+<ParamField path="key" type="string" required>
+  The field key
+</ParamField>
+
+<ParamField path="val" type="int64" required>
+  The int64 value
+</ParamField>
+
+**Returns:** A `Field` with type `Int64Type`.
+
+### Example
+
+```go
+logger.Info("File size",
+    go_logs.Int64("bytes", 1536299520))
+```
+
+---
+
+## Float64
+
+Creates a Field with a float64 value. Useful for measurements, percentages, etc.
+
+```go
+func Float64(key string, val float64) Field
+```
+
+<ParamField path="key" type="string" required>
+  The field key
+</ParamField>
+
+<ParamField path="val" type="float64" required>
+  The float64 value
+</ParamField>
+
+**Returns:** A `Field` with type `Float64Type`.
+
+### Example
+
+```go
+logger.Info("Memory usage",
+    go_logs.Float64("cpu_percent", 45.7),
+    go_logs.Float64("memory_gb", 1.23))
+```
+
+---
+
+## Bool
+
+Creates a Field with a bool value. Useful for flags and boolean state.
+
+```go
+func Bool(key string, val bool) Field
+```
+
+<ParamField path="key" type="string" required>
+  The field key
+</ParamField>
+
+<ParamField path="val" type="bool" required>
+  The boolean value
+</ParamField>
+
+**Returns:** A `Field` with type `BoolType`.
+
+### Example
+
+```go
+logger.Info("Feature flags",
+    go_logs.Bool("debug_mode", true),
+    go_logs.Bool("cache_enabled", false))
+```
+
+---
+
+## Err
+
+Creates a Field with an error value. The key is automatically set to "error" for consistency. Errors are formatted specially by formatters.
+
+```go
+func Err(err error) Field
+```
+
+<ParamField path="err" type="error" required>
+  The error value
+</ParamField>
+
+**Returns:** A `Field` with type `ErrorType` and key "error".
+
+### Example
+
+```go
+logger.Error("Database connection failed",
+    go_logs.Err(err),
+    go_logs.String("host", "localhost"))
+```
+
+---
+
+## Any
+
+Creates a Field with an arbitrary value. Use this when the type doesn't match the typed helpers. The formatter will use `fmt.Sprintf("%v")` to format the value.
+
+```go
+func Any(key string, val interface{}) Field
+```
+
+<ParamField path="key" type="string" required>
+  The field key
+</ParamField>
+
+<ParamField path="val" type="interface{}" required>
+  The value of any type
+</ParamField>
+
+**Returns:** A `Field` with type `AnyType`.
+
+### Example
+
+```go
+type User struct {
+    Name string
+    Age  int
+}
+
+logger.Info("Complex data",
+    go_logs.Any("user", User{Name: "John", Age: 30}))
+```
+
+---
+
+## Performance
+
+All field helper functions are designed for zero allocations and optimal performance:
+
+- **Field creation**: ~0.34 ns/op with 0 allocations
+- **Zero-allocation design**: Fields are simple structs passed by value
+- **Type safety**: Compile-time type checking for field values
+
+## Best Practices
+
+1. **Use typed helpers**: Prefer `String()`, `Int()`, etc. over `Any()` for better performance and type safety
+2. **Consistent naming**: Use snake_case for field keys (e.g., `user_id`, `request_id`)
+3. **Error handling**: Always use `Err()` for error values to ensure consistent formatting
+4. **Avoid sensitive data**: Don't log passwords, tokens, or other secrets in field values

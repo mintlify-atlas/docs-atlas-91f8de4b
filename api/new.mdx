@@ -1,0 +1,521 @@
+---
+title: "New() Constructor"
+description: "Create and configure Logger instances with the New() function"
+---
+
+## Overview
+
+The `New()` function is the primary constructor for creating Logger instances in go_logs v3. It uses the Option pattern for flexible, readable configuration.
+
+## Function Signature
+
+```go
+func New(opts ...Option) (Logger, error)
+```
+
+<ParamField path="opts" type="...Option">
+  Zero or more Option functions to configure the logger (WithLevel, WithOutput, WithFormatter, etc.)
+</ParamField>
+
+**Returns:**
+- `Logger` - A configured Logger instance
+- `error` - An error if configuration fails (e.g., invalid file path)
+
+## Default Configuration
+
+If no options are provided, the logger uses sensible defaults:
+
+| Setting | Default Value | Description |
+|---------|--------------|-------------|
+| Level | `InfoLevel` | Minimum log level |
+| Output | `os.Stdout` | Where logs are written |
+| Formatter | `TextFormatter` | Log format (or from `LOG_FORMAT` env var) |
+| Hooks | `[]` (empty) | No hooks configured |
+| Redactor | `nil` | No redaction |
+| Caller | `false` | Caller info disabled |
+| StackTrace | `false` | Stack traces disabled |
+
+**Example:**
+
+```go
+// Logger with all defaults
+logger, err := go_logs.New()
+if err != nil {
+    log.Fatal(err)
+}
+
+logger.Info("Server started") // Uses defaults
+```
+
+## Configuration Options
+
+### WithLevel
+
+Sets the minimum log level threshold.
+
+```go
+func WithLevel(level Level) Option
+```
+
+<ParamField path="level" type="Level" required>
+  Minimum level: TraceLevel (10), DebugLevel (20), InfoLevel (30), WarnLevel (40), ErrorLevel (50), FatalLevel (60), SilentLevel (0)
+</ParamField>
+
+**Example:**
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel),
+)
+
+logger.Debug("This will be logged")
+logger.Trace("This will be filtered out")
+```
+
+### WithOutput
+
+Sets where logs are written.
+
+```go
+func WithOutput(output io.Writer) Option
+```
+
+<ParamField path="output" type="io.Writer" required>
+  Any io.Writer (os.Stdout, os.Stderr, file, buffer, custom writer)
+</ParamField>
+
+**Example:**
+
+```go
+file, _ := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+defer file.Close()
+
+logger, _ := go_logs.New(
+    go_logs.WithOutput(file),
+)
+
+logger.Info("Logged to file")
+```
+
+### WithFormatter
+
+Sets the log format.
+
+```go
+func WithFormatter(formatter Formatter) Option
+```
+
+<ParamField path="formatter" type="Formatter" required>
+  TextFormatter (colored output for development) or JSONFormatter (structured JSON for production)
+</ParamField>
+
+**Example:**
+
+```go
+// JSON formatter for production
+logger, _ := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+)
+
+logger.Info("User login", go_logs.String("user_id", "123"))
+// Output: {"timestamp":"2026-03-03T10:30:00Z","level":"INFO","message":"User login","user_id":"123"}
+
+// Text formatter for development
+devLogger, _ := go_logs.New(
+    go_logs.WithFormatter(go_logs.NewTextFormatter()),
+)
+
+devLogger.Info("Server started")
+// Output: 2026/03/03 10:30:00 [INFO] Server started
+```
+
+### WithRotatingFile
+
+Configures automatic log file rotation by size.
+
+```go
+func WithRotatingFile(filename string, maxSizeMB int, maxBackups int) Option
+```
+
+<ParamField path="filename" type="string" required>
+  Path to the log file (e.g., "/var/log/app.log")
+</ParamField>
+
+<ParamField path="maxSizeMB" type="int" required>
+  Maximum file size in MB before rotation (e.g., 100)
+</ParamField>
+
+<ParamField path="maxBackups" type="int" required>
+  Number of backup files to keep (e.g., 5)
+</ParamField>
+
+**Example:**
+
+```go
+logger, err := go_logs.New(
+    go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Automatically rotates when app.log reaches 100MB
+// Keeps: app.log, app.log.1, app.log.2, app.log.3, app.log.4, app.log.5
+```
+
+### WithHook
+
+Adds a hook for custom log processing.
+
+```go
+func WithHook(hook Hook) Option
+```
+
+<ParamField path="hook" type="Hook" required>
+  A Hook interface implementation for custom processing (e.g., SlackHook, MetricsHook)
+</ParamField>
+
+**Example:**
+
+```go
+import "github.com/drossan/go_logs/hooks"
+
+slackHook := hooks.NewSlackHook("xoxb-token", "C123456", go_logs.ErrorLevel)
+
+logger, _ := go_logs.New(
+    go_logs.WithHook(slackHook),
+)
+
+// Errors and above are sent to Slack
+logger.Error("Database connection failed", go_logs.Err(err))
+```
+
+### WithRedactor
+
+Enables automatic redaction of sensitive fields.
+
+```go
+func WithRedactor(keys ...string) Option
+```
+
+<ParamField path="keys" type="...string" required>
+  Field keys to redact (e.g., "password", "token", "api_key")
+</ParamField>
+
+**Example:**
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRedactor("password", "token", "api_key"),
+)
+
+logger.Info("User login",
+    go_logs.String("username", "john"),
+    go_logs.String("password", "secret123"),
+)
+// Output: INFO User login username=john password=***
+```
+
+**Common Redaction:**
+
+```go
+// Redacts: password, passwd, pwd, token, secret, api_key, apikey, authorization, auth
+logger, _ := go_logs.New(
+    go_logs.WithCommonRedaction(),
+)
+```
+
+### WithCaller
+
+Enables automatic capture of caller information (file, line, function).
+
+```go
+func WithCaller(enabled bool) Option
+```
+
+<ParamField path="enabled" type="bool" required>
+  true to enable caller information, false to disable
+</ParamField>
+
+**Example:**
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+)
+
+logger.Info("Server started")
+// Output: 2026/03/03 10:30:00 [INFO] main.go:42 main() Server started
+```
+
+### WithCallerLevel
+
+Enables automatic caller capture only for specific levels and above.
+
+```go
+func WithCallerLevel(level Level) Option
+```
+
+<ParamField path="level" type="Level" required>
+  Minimum level for automatic caller capture (default: ErrorLevel)
+</ParamField>
+
+**Example:**
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCallerLevel(go_logs.ErrorLevel),
+)
+
+// No caller info for Info
+logger.Info("Normal operation")
+
+// Caller info automatically added for Error
+logger.Error("Failed to connect", go_logs.Err(err))
+// Output: 2026/03/03 10:30:00 [ERROR] service.go:123 Connect() Failed to connect error=...
+```
+
+### WithStackTrace
+
+Enables stack trace capture.
+
+```go
+func WithStackTrace(enabled bool) Option
+```
+
+<ParamField path="enabled" type="bool" required>
+  true to enable stack traces, false to disable
+</ParamField>
+
+**Example:**
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+)
+
+logger.Error("Critical error", go_logs.Err(err))
+// Output includes full stack trace for errors
+```
+
+### WithMultiOutput
+
+Writes logs to multiple outputs simultaneously.
+
+```go
+func WithMultiOutput(writers ...io.Writer) Option
+```
+
+<ParamField path="writers" type="...io.Writer" required>
+  Multiple io.Writer destinations (e.g., stdout + file)
+</ParamField>
+
+**Example:**
+
+```go
+file, _ := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+defer file.Close()
+
+logger, _ := go_logs.New(
+    go_logs.WithMultiOutput(os.Stdout, file),
+)
+
+// Logs to both console and file
+logger.Info("Server started")
+```
+
+## Complete Examples
+
+### Development Logger
+
+```go
+devLogger, err := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel),
+    go_logs.WithFormatter(go_logs.NewTextFormatter()),
+    go_logs.WithOutput(os.Stdout),
+    go_logs.WithCaller(true),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+devLogger.Debug("Starting service", go_logs.String("env", "development"))
+```
+
+### Production Logger
+
+```go
+prodLogger, err := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithRotatingFile("/var/log/app.log", 100, 10),
+    go_logs.WithCommonRedaction(),
+    go_logs.WithCallerLevel(go_logs.ErrorLevel),
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer prodLogger.Sync()
+
+prodLogger.Info("Application started",
+    go_logs.String("version", "1.0.0"),
+    go_logs.String("env", "production"),
+)
+```
+
+### Service Logger with Hooks
+
+```go
+import "github.com/drossan/go_logs/hooks"
+
+slackHook := hooks.NewSlackHook(
+    os.Getenv("SLACK_TOKEN"),
+    os.Getenv("SLACK_CHANNEL_ID"),
+    go_logs.ErrorLevel,
+)
+
+logger, err := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+    go_logs.WithOutput(os.Stdout),
+    go_logs.WithHook(slackHook),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Errors are logged to stdout AND sent to Slack
+logger.Error("Payment processing failed",
+    go_logs.String("order_id", "12345"),
+    go_logs.Err(err),
+)
+```
+
+### Multi-Environment Logger
+
+```go
+func NewLogger(env string) (go_logs.Logger, error) {
+    opts := []go_logs.Option{
+        go_logs.WithLevel(go_logs.InfoLevel),
+    }
+
+    switch env {
+    case "development":
+        opts = append(opts,
+            go_logs.WithLevel(go_logs.DebugLevel),
+            go_logs.WithFormatter(go_logs.NewTextFormatter()),
+            go_logs.WithOutput(os.Stdout),
+            go_logs.WithCaller(true),
+        )
+    case "production":
+        opts = append(opts,
+            go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+            go_logs.WithRotatingFile("/var/log/app.log", 100, 10),
+            go_logs.WithCommonRedaction(),
+            go_logs.WithCallerLevel(go_logs.ErrorLevel),
+        )
+    }
+
+    return go_logs.New(opts...)
+}
+```
+
+## Error Handling
+
+### Configuration Errors
+
+```go
+logger, err := go_logs.New(
+    go_logs.WithRotatingFile("/invalid/path/app.log", 100, 5),
+)
+if err != nil {
+    // Handle configuration errors
+    log.Fatalf("Failed to create logger: %v", err)
+}
+```
+
+### Common Errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| "failed to create rotating file writer" | Invalid file path or permissions | Check path exists and is writable |
+| "failed to create enhanced rotating file writer" | Invalid rotation configuration | Verify maxSizeMB > 0 and maxBackups >= 0 |
+
+## Environment Variables
+
+The `New()` function respects environment variables for default configuration:
+
+```bash
+# Set default log level
+export LOG_LEVEL=debug
+
+# Set default format (text or json)
+export LOG_FORMAT=json
+```
+
+**Example:**
+
+```go
+// Uses LOG_FORMAT and LOG_LEVEL from environment
+logger, _ := go_logs.New()
+
+// Override environment with explicit options
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel), // Overrides LOG_LEVEL
+)
+```
+
+## Performance Considerations
+
+### Zero Overhead Options
+
+The following options have zero performance overhead:
+- `WithLevel` - Fast-path filtering
+- `WithFormatter` - Same performance for Text/JSON
+- `WithOutput` - Direct write
+
+### Low Overhead Options
+
+Minimal performance impact:
+- `WithRedactor` - Only processes configured keys
+- `WithCallerLevel` - Only captures when level threshold met
+- `WithRotatingFile` - Buffered writes
+
+### Higher Overhead Options
+
+Use these selectively:
+- `WithCaller(true)` - Runtime stack inspection on every log
+- `WithStackTrace(true)` - Full stack capture
+- `WithHook` - Depends on hook implementation
+
+## Thread Safety
+
+The `New()` function is thread-safe. You can create multiple loggers concurrently:
+
+```go
+var wg sync.WaitGroup
+loggers := make([]go_logs.Logger, 10)
+
+for i := 0; i < 10; i++ {
+    wg.Add(1)
+    go func(idx int) {
+        defer wg.Done()
+        logger, _ := go_logs.New(
+            go_logs.WithLevel(go_logs.InfoLevel),
+        )
+        loggers[idx] = logger
+    }(i)
+}
+
+wg.Wait()
+```
+
+## See Also
+
+- [Logger Interface](/api/logger) - Interface documentation
+- [Logging Methods](/api/log-methods) - Method details
+- [Configuration](/configuration) - Environment variables and configuration
+- [Formatters](/formatters) - TextFormatter and JSONFormatter
+- [Hooks](/hooks) - Custom log processing

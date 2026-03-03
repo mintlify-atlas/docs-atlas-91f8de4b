@@ -1,0 +1,396 @@
+---
+title: 'Formatting Options'
+description: 'Options for caller information, stack traces, and log entry formatting'
+---
+
+## Overview
+
+Formatting options enhance log entries with additional context such as caller information (file, line, function) and stack traces for debugging.
+
+## WithCaller
+
+Enables or disables caller information in log entries.
+
+### Signature
+
+```go
+func WithCaller(enabled bool) Option
+```
+
+### Parameters
+
+- `enabled` (bool): Whether to include caller information in log entries
+
+### Returns
+
+- `Option`: A configuration option that enables/disables caller capture
+
+### Type Definition
+
+```go
+type CallerOption struct {
+    Enabled bool
+}
+```
+
+### Description
+
+When enabled, each log entry includes file name, line number, and function name of the code that generated the log message. This is invaluable for debugging but adds a small performance overhead (~100-200ns per log call).
+
+### Output Example
+
+```
+[2026/03/03 10:30:00] INFO main.go:42 myFunction connection established
+```
+
+### Examples
+
+```go
+// Enable caller info for all log levels
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+)
+
+logger.Info("User logged in") // Includes caller info
+// Output: [2026/03/03 10:30:00] INFO main.go:25 handleLogin User logged in
+```
+
+```go
+// Disable caller info (default)
+logger, _ := go_logs.New(
+    go_logs.WithCaller(false),
+)
+
+logger.Info("User logged in") // No caller info
+// Output: [2026/03/03 10:30:00] INFO User logged in
+```
+
+### Performance Note
+
+Enabling caller adds approximately 100-200ns per log call due to runtime stack inspection. For high-performance applications, consider using `WithCallerLevel` to enable caller only for errors.
+
+---
+
+## WithCallerLevel
+
+Sets the minimum level for automatic caller info capture.
+
+### Signature
+
+```go
+func WithCallerLevel(level Level) Option
+```
+
+### Parameters
+
+- `level` (Level): The minimum log level for capturing caller information
+
+### Returns
+
+- `Option`: A configuration option that sets the caller level threshold
+
+### Type Definition
+
+```go
+type CallerLevelOption struct {
+    Level Level
+}
+```
+
+### Description
+
+Caller information (file:line function) is captured only for log entries at or above the specified level. This allows you to balance debugging information with performance.
+
+**Default**: `ErrorLevel` (caller info for Error and Fatal only)
+
+### Common Values
+
+- `WarnLevel`: Capture for Warn, Error, Fatal
+- `ErrorLevel`: Capture for Error, Fatal (default)
+- `FatalLevel`: Capture only for Fatal
+- `SilentLevel`: Disable automatic caller capture
+
+### Examples
+
+```go
+// Capture caller for warnings and above
+logger, _ := go_logs.New(
+    go_logs.WithCallerLevel(go_logs.WarnLevel),
+)
+
+logger.Info("Server started")     // No caller info
+logger.Warn("High memory usage")  // Includes caller info
+logger.Error("Database error")    // Includes caller info
+```
+
+```go
+// Capture caller only for errors and fatal
+logger, _ := go_logs.New(
+    go_logs.WithCallerLevel(go_logs.ErrorLevel),
+)
+
+logger.Info("Request received")   // No caller info
+logger.Warn("Slow query")         // No caller info
+logger.Error("Connection failed") // Includes caller info
+```
+
+### Note
+
+`WithCaller(true)` overrides this setting and enables caller for ALL levels.
+
+---
+
+## WithCallerSkip
+
+Sets the number of stack frames to skip when capturing caller info.
+
+### Signature
+
+```go
+func WithCallerSkip(skip int) Option
+```
+
+### Parameters
+
+- `skip` (int): Number of stack frames to skip (must be >= 0)
+
+### Returns
+
+- `Option`: A configuration option that sets the caller skip level
+
+### Type Definition
+
+```go
+type CallerSkipOption struct {
+    Skip int
+}
+```
+
+### Description
+
+Useful when wrapping the logger with additional helper functions. By default, the logger skips 2 frames (the GetCaller and Log methods). Increase this value if you have wrapper functions.
+
+**Default**: 2 (skips GetCaller and Log methods)
+
+### Examples
+
+```go
+// Without wrapper (default skip=2)
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+    go_logs.WithCallerSkip(2), // Default
+)
+
+logger.Info("Direct call")
+// Shows: main.go:42 main.myFunction
+```
+
+```go
+// With wrapper function
+type MyLogger struct {
+    logger go_logs.Logger
+}
+
+func (l *MyLogger) LogInfo(msg string) {
+    l.logger.Info(msg) // This is the wrapper
+}
+
+// Need to skip one additional frame
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+    go_logs.WithCallerSkip(3), // Skip wrapper too
+)
+
+myLogger := &MyLogger{logger: logger}
+myLogger.LogInfo("Wrapped call")
+// Shows: main.go:55 main.someFunction (not MyLogger.LogInfo)
+```
+
+### Use Cases
+
+- Creating custom logging wrappers
+- Integrating with existing logging abstractions
+- Building domain-specific loggers
+
+---
+
+## WithStackTrace
+
+Enables or disables stack trace capture in log entries.
+
+### Signature
+
+```go
+func WithStackTrace(enabled bool) Option
+```
+
+### Parameters
+
+- `enabled` (bool): Whether to capture stack traces
+
+### Returns
+
+- `Option`: A configuration option that enables/disables stack trace capture
+
+### Type Definition
+
+```go
+type StackTraceOption struct {
+    Enabled bool
+}
+```
+
+### Description
+
+When enabled, captures full stack traces for log entries. Stack traces are captured for Error level and above by default. Use `WithStackTraceLevel` to customize the minimum level.
+
+### Examples
+
+```go
+// Enable stack traces for errors
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+)
+
+logger.Error("Database connection failed",
+    go_logs.Err(err),
+)
+// Includes full stack trace
+```
+
+```go
+// Disable stack traces (default)
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(false),
+)
+
+logger.Error("Error occurred")
+// No stack trace included
+```
+
+### Performance Impact
+
+Stack trace capture is expensive. Only enable for error scenarios where detailed debugging is needed.
+
+---
+
+## WithStackTraceLevel
+
+Sets the minimum level for automatic stack trace capture.
+
+### Signature
+
+```go
+func WithStackTraceLevel(level Level) Option
+```
+
+### Parameters
+
+- `level` (Level): The minimum log level for capturing stack traces
+
+### Returns
+
+- `Option`: A configuration option that sets the stack trace level threshold
+
+### Type Definition
+
+```go
+type StackTraceLevelOption struct {
+    Level Level
+}
+```
+
+### Description
+
+Stack traces are captured only for log entries at or above this level. This allows you to limit the performance impact of stack trace capture.
+
+**Default**: `ErrorLevel` (stack traces for Error and Fatal)
+
+### Common Values
+
+- `WarnLevel`: Capture for Warn, Error, Fatal
+- `ErrorLevel`: Capture for Error, Fatal (default)
+- `FatalLevel`: Capture only for Fatal
+
+### Examples
+
+```go
+// Capture stack traces for warnings and above
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.WarnLevel),
+)
+
+logger.Info("Normal operation")   // No stack trace
+logger.Warn("Memory pressure")    // Includes stack trace
+logger.Error("Fatal error")       // Includes stack trace
+```
+
+```go
+// Capture stack traces only for fatal errors
+logger, _ := go_logs.New(
+    go_logs.WithStackTrace(true),
+    go_logs.WithStackTraceLevel(go_logs.FatalLevel),
+)
+
+logger.Error("Database error")    // No stack trace
+logger.Fatal("Critical failure")  // Includes stack trace
+```
+
+---
+
+## Combined Usage
+
+```go
+// Development configuration: full debugging info
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel),
+    go_logs.WithCaller(true),              // Always show caller
+    go_logs.WithStackTrace(true),          // Enable stack traces
+    go_logs.WithStackTraceLevel(go_logs.ErrorLevel),
+)
+```
+
+```go
+// Production configuration: minimal overhead
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithCallerLevel(go_logs.ErrorLevel), // Caller only for errors
+    go_logs.WithStackTrace(true),                // Stack traces enabled
+    go_logs.WithStackTraceLevel(go_logs.FatalLevel), // Only for fatal
+)
+```
+
+```go
+// Custom wrapper with adjusted skip
+type AppLogger struct {
+    log go_logs.Logger
+}
+
+func (l *AppLogger) Error(msg string, fields ...go_logs.Field) {
+    l.log.Error(msg, fields...)
+}
+
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+    go_logs.WithCallerSkip(3), // Skip wrapper frame
+)
+
+appLogger := &AppLogger{log: logger}
+appLogger.Error("Error from wrapper")
+// Caller shows actual call site, not wrapper
+```
+
+## Performance Considerations
+
+| Feature | Overhead | Recommendation |
+|---------|----------|----------------|
+| Caller (all levels) | ~100-200ns/call | Development only |
+| Caller (error+) | Minimal | Safe for production |
+| Stack trace | High (µs) | Errors/fatal only |
+
+## Related
+
+- [Core Options](/api/options/core) - Basic logger configuration
+- [Entry Reference](/api/core/entry) - Log entry structure
+- [CallerInfo Reference](/api/core/caller) - Caller information details

@@ -1,0 +1,450 @@
+---
+title: 'CLI Application Logging'
+description: 'Command-line tools with colored output, progress tracking, and verbose modes'
+icon: 'terminal'
+---
+
+## Basic CLI Logger
+
+Simple CLI tool with colored console output:
+
+```go
+package main
+
+import (
+    "flag"
+    "os"
+    
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Parse command-line flags
+    verbose := flag.Bool("verbose", false, "Enable verbose logging")
+    debug := flag.Bool("debug", false, "Enable debug logging")
+    quiet := flag.Bool("quiet", false, "Suppress all output except errors")
+    flag.Parse()
+    
+    // Determine log level from flags
+    level := go_logs.InfoLevel
+    if *quiet {
+        level = go_logs.ErrorLevel
+    } else if *debug {
+        level = go_logs.DebugLevel
+    } else if *verbose {
+        level = go_logs.TraceLevel
+    }
+    
+    // Create logger with colored text output
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(level),
+        go_logs.WithFormatter(go_logs.NewTextFormatter()),
+        go_logs.WithOutput(os.Stdout),
+    )
+    
+    logger.Info("CLI application started")
+    logger.Debug("Debug mode enabled")
+    
+    // Run CLI logic
+    if err := runCLI(logger); err != nil {
+        logger.Error("CLI failed", go_logs.Err(err))
+        os.Exit(1)
+    }
+    
+    logger.Info("CLI completed successfully")
+}
+
+func runCLI(logger go_logs.Logger) error {
+    logger.Info("Processing files...")
+    // CLI logic here
+    return nil
+}
+```
+
+**Output with colors:**
+```bash
+$ ./mycli --verbose
+[2026/03/03 10:30:00] INFO CLI application started
+[2026/03/03 10:30:00] DEBUG Debug mode enabled
+[2026/03/03 10:30:00] INFO Processing files...
+[2026/03/03 10:30:00] INFO CLI completed successfully
+```
+
+## CLI with Progress Logging
+
+Track progress with structured logging:
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+    
+    "github.com/drossan/go_logs"
+)
+
+type FileProcessor struct {
+    logger go_logs.Logger
+}
+
+func (p *FileProcessor) ProcessFiles(files []string) error {
+    total := len(files)
+    
+    p.logger.Info("Starting file processing",
+        go_logs.Int("total_files", total),
+    )
+    
+    for i, file := range files {
+        if err := p.processFile(file, i+1, total); err != nil {
+            return err
+        }
+    }
+    
+    p.logger.Info("File processing completed",
+        go_logs.Int("processed", total),
+    )
+    
+    return nil
+}
+
+func (p *FileProcessor) processFile(file string, current, total int) error {
+    start := time.Now()
+    
+    // Log progress
+    p.logger.Info("Processing file",
+        go_logs.String("file", file),
+        go_logs.Int("progress", current),
+        go_logs.Int("total", total),
+        go_logs.Float64("percent", float64(current)/float64(total)*100),
+    )
+    
+    // Simulate processing
+    time.Sleep(100 * time.Millisecond)
+    
+    duration := time.Since(start)
+    
+    p.logger.Debug("File processed",
+        go_logs.String("file", file),
+        go_logs.Float64("duration_ms", float64(duration.Milliseconds())),
+    )
+    
+    return nil
+}
+
+func main() {
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewTextFormatter()),
+    )
+    
+    processor := &FileProcessor{logger: logger}
+    
+    files := []string{"file1.txt", "file2.txt", "file3.txt"}
+    if err := processor.ProcessFiles(files); err != nil {
+        logger.Error("Processing failed", go_logs.Err(err))
+    }
+}
+```
+
+## CLI with Subcommands
+
+Multi-command CLI tool with command-specific logging:
+
+```go
+package main
+
+import (
+    "flag"
+    "fmt"
+    "os"
+    
+    "github.com/drossan/go_logs"
+)
+
+type CLI struct {
+    logger go_logs.Logger
+}
+
+func (c *CLI) Run(args []string) error {
+    if len(args) < 1 {
+        return fmt.Errorf("no command specified")
+    }
+    
+    command := args[0]
+    
+    // Create command-scoped logger
+    cmdLogger := c.logger.With(
+        go_logs.String("command", command),
+    )
+    
+    switch command {
+    case "sync":
+        return c.runSync(cmdLogger, args[1:])
+    case "deploy":
+        return c.runDeploy(cmdLogger, args[1:])
+    case "status":
+        return c.runStatus(cmdLogger, args[1:])
+    default:
+        return fmt.Errorf("unknown command: %s", command)
+    }
+}
+
+func (c *CLI) runSync(logger go_logs.Logger, args []string) error {
+    fs := flag.NewFlagSet("sync", flag.ExitOnError)
+    source := fs.String("source", "", "Source directory")
+    dest := fs.String("dest", "", "Destination directory")
+    fs.Parse(args)
+    
+    logger.Info("Starting sync operation",
+        go_logs.String("source", *source),
+        go_logs.String("dest", *dest),
+    )
+    
+    // Simulate sync
+    logger.Info("Scanning source directory")
+    logger.Info("Copying files")
+    logger.Info("Sync completed successfully",
+        go_logs.Int("files_copied", 42),
+    )
+    
+    return nil
+}
+
+func (c *CLI) runDeploy(logger go_logs.Logger, args []string) error {
+    logger.Info("Starting deployment")
+    
+    // Deployment steps with structured logging
+    steps := []struct {
+        name string
+        fn   func() error
+    }{
+        {"validate", func() error {
+            logger.Info("Validating configuration")
+            return nil
+        }},
+        {"build", func() error {
+            logger.Info("Building application")
+            return nil
+        }},
+        {"push", func() error {
+            logger.Info("Pushing to registry")
+            return nil
+        }},
+        {"deploy", func() error {
+            logger.Info("Deploying to cluster")
+            return nil
+        }},
+    }
+    
+    for i, step := range steps {
+        logger.Info("Executing step",
+            go_logs.String("step", step.name),
+            go_logs.Int("step_number", i+1),
+            go_logs.Int("total_steps", len(steps)),
+        )
+        
+        if err := step.fn(); err != nil {
+            logger.Error("Step failed",
+                go_logs.String("step", step.name),
+                go_logs.Err(err),
+            )
+            return err
+        }
+    }
+    
+    logger.Info("Deployment completed successfully")
+    return nil
+}
+
+func (c *CLI) runStatus(logger go_logs.Logger, args []string) error {
+    logger.Info("Checking status")
+    
+    // Check various components
+    logger.Info("API server: healthy",
+        go_logs.String("status", "healthy"),
+    )
+    logger.Info("Database: connected",
+        go_logs.String("status", "connected"),
+    )
+    
+    return nil
+}
+
+func main() {
+    verbose := flag.Bool("v", false, "Verbose output")
+    flag.Parse()
+    
+    level := go_logs.InfoLevel
+    if *verbose {
+        level = go_logs.DebugLevel
+    }
+    
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(level),
+        go_logs.WithFormatter(go_logs.NewTextFormatter()),
+    )
+    
+    cli := &CLI{logger: logger}
+    
+    if err := cli.Run(flag.Args()); err != nil {
+        logger.Error("Command failed", go_logs.Err(err))
+        os.Exit(1)
+    }
+}
+```
+
+**Usage:**
+```bash
+$ ./mycli sync --source=/data --dest=/backup
+[2026/03/03 10:30:00] INFO Starting sync operation command=sync source=/data dest=/backup
+[2026/03/03 10:30:00] INFO Scanning source directory command=sync
+[2026/03/03 10:30:00] INFO Copying files command=sync
+[2026/03/03 10:30:00] INFO Sync completed successfully command=sync files_copied=42
+
+$ ./mycli deploy
+[2026/03/03 10:30:00] INFO Starting deployment command=deploy
+[2026/03/03 10:30:00] INFO Executing step command=deploy step=validate step_number=1 total_steps=4
+[2026/03/03 10:30:00] INFO Validating configuration command=deploy
+...
+```
+
+## CLI with File and Console Output
+
+Log to both console (colored) and file (JSON):
+
+```go
+package main
+
+import (
+    "os"
+    
+    "github.com/drossan/go_logs"
+)
+
+func main() {
+    // Create console logger with colors
+    consoleLogger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.InfoLevel),
+        go_logs.WithFormatter(go_logs.NewTextFormatter()),
+        go_logs.WithOutput(os.Stdout),
+    )
+    
+    // Create file logger with JSON
+    fileLogger, _ := go_logs.New(
+        go_logs.WithLevel(go_logs.DebugLevel),  // Log more to file
+        go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+        go_logs.WithRotatingFile("./cli.log", 10, 3),
+    )
+    
+    // Wrapper that logs to both
+    logger := &DualLogger{
+        console: consoleLogger,
+        file:    fileLogger,
+    }
+    
+    logger.Info("CLI started")  // Appears in both console and file
+    logger.Debug("Debug info")  // Only in file (below console level)
+}
+
+type DualLogger struct {
+    console go_logs.Logger
+    file    go_logs.Logger
+}
+
+func (l *DualLogger) Info(msg string, fields ...go_logs.Field) {
+    l.console.Info(msg, fields...)
+    l.file.Info(msg, fields...)
+}
+
+func (l *DualLogger) Debug(msg string, fields ...go_logs.Field) {
+    l.console.Debug(msg, fields...)
+    l.file.Debug(msg, fields...)
+}
+
+func (l *DualLogger) Error(msg string, fields ...go_logs.Field) {
+    l.console.Error(msg, fields...)
+    l.file.Error(msg, fields...)
+}
+```
+
+## CLI with Environment-Based Configuration
+
+```go
+package main
+
+import (
+    "os"
+    "strings"
+    
+    "github.com/drossan/go_logs"
+)
+
+func createLogger() go_logs.Logger {
+    // Read configuration from environment
+    logLevel := os.Getenv("LOG_LEVEL")
+    if logLevel == "" {
+        logLevel = "info"
+    }
+    
+    logFormat := os.Getenv("LOG_FORMAT")
+    if logFormat == "" {
+        logFormat = "text"
+    }
+    
+    // Parse level
+    level := go_logs.InfoLevel
+    switch strings.ToLower(logLevel) {
+    case "trace":
+        level = go_logs.TraceLevel
+    case "debug":
+        level = go_logs.DebugLevel
+    case "warn":
+        level = go_logs.WarnLevel
+    case "error":
+        level = go_logs.ErrorLevel
+    }
+    
+    // Choose formatter
+    var formatter go_logs.Formatter
+    if logFormat == "json" {
+        formatter = go_logs.NewJSONFormatter()
+    } else {
+        formatter = go_logs.NewTextFormatter()
+    }
+    
+    logger, _ := go_logs.New(
+        go_logs.WithLevel(level),
+        go_logs.WithFormatter(formatter),
+        go_logs.WithOutput(os.Stdout),
+    )
+    
+    return logger
+}
+
+func main() {
+    logger := createLogger()
+    
+    logger.Info("Application started",
+        go_logs.String("log_level", os.Getenv("LOG_LEVEL")),
+        go_logs.String("log_format", os.Getenv("LOG_FORMAT")),
+    )
+}
+```
+
+**Usage:**
+```bash
+$ LOG_LEVEL=debug LOG_FORMAT=json ./mycli
+{"timestamp":"2026-03-03T10:30:00Z","level":"INFO","message":"Application started","fields":{"log_level":"debug","log_format":"json"}}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Production Setup" icon="rocket" href="/examples/production-setup">
+    Production configuration and deployment
+  </Card>
+  <Card title="Basic Usage" icon="book-open" href="/examples/basic-usage">
+    Learn the fundamentals of go_logs
+  </Card>
+</CardGroup>

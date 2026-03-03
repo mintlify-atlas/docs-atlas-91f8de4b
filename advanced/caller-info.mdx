@@ -1,0 +1,455 @@
+---
+title: 'Caller Information'
+description: 'Capture file name, line number, and function name for debugging'
+---
+
+## Overview
+
+Caller information captures the source location of each log statement, showing:
+
+- **File name** (e.g., `main.go`)
+- **Line number** (e.g., `42`)
+- **Function name** (e.g., `handleRequest`)
+- **Package name** (e.g., `server`)
+
+Implementation: `~/workspace/source/caller.go`
+
+## Quick Start
+
+### Enable Caller Info
+
+From `~/workspace/source/options.go:144`:
+
+```go
+import "github.com/drossan/go_logs"
+
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+)
+
+logger.Info("server started")  // Includes file:line function
+```
+
+Output:
+```
+[2026/03/03 10:00:00] INFO main.go:42 main server started
+```
+
+### Auto-Capture for Errors
+
+From `~/workspace/source/options.go:208`:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCallerLevel(go_logs.ErrorLevel),
+)
+
+logger.Info("request processed")         // No caller info
+logger.Error("database connection failed") // Includes caller info
+```
+
+## CallerInfo Structure
+
+From `~/workspace/source/caller.go:11-17`:
+
+```go
+type CallerInfo struct {
+    File     string // Short file name (e.g., "main.go")
+    FileFull string // Full file path
+    Line     int    // Line number
+    Func     string // Function name (e.g., "main.myFunction")
+    Package  string // Package name
+}
+```
+
+## Configuration Options
+
+### WithCaller
+
+From `~/workspace/source/options.go:137-146`:
+
+Enables caller info for **all log levels**:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),  // Capture for ALL levels
+)
+
+logger.Debug("debugging")    // Includes caller: debug.go:10 debugFunc
+logger.Info("processing")    // Includes caller: main.go:42 main
+logger.Error("failed")       // Includes caller: handler.go:99 handleRequest
+```
+
+Performance note: Adds ~100-200ns per log call.
+
+### WithCallerLevel
+
+From `~/workspace/source/options.go:193-210`:
+
+Enables automatic caller capture for logs **at or above** a threshold:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCallerLevel(go_logs.WarnLevel),  // Auto-capture for Warn, Error, Fatal
+)
+
+logger.Info("request started")     // No caller
+logger.Warn("slow query")          // Includes caller
+logger.Error("connection failed")  // Includes caller
+```
+
+Default: `ErrorLevel` (caller captured for Error and Fatal).
+
+Common values:
+- `go_logs.WarnLevel` - Capture for Warn, Error, Fatal
+- `go_logs.ErrorLevel` - Capture for Error, Fatal (default)
+- `go_logs.FatalLevel` - Capture only for Fatal
+- `go_logs.SilentLevel` - Disable auto-capture (use `WithCaller(true)` instead)
+
+### WithCallerSkip
+
+From `~/workspace/source/options.go:183-190`:
+
+Adjusts stack frame skipping for wrapper functions:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+    go_logs.WithCallerSkip(3),  // Default is 2
+)
+
+// Use when wrapping logger in helper functions
+func LogError(msg string) {
+    logger.Error(msg)  // Will show caller of LogError, not this line
+}
+```
+
+Default: `2` (skips `GetCaller` and `Log` methods).
+
+## GetCaller Implementation
+
+From `~/workspace/source/caller.go:21-49`:
+
+```go
+func GetCaller(skip int) *CallerInfo {
+    pc, file, line, ok := runtime.Caller(skip + 1)
+    if !ok {
+        return nil
+    }
+
+    fn := runtime.FuncForPC(pc)
+    var fnName, pkgName string
+    if fn != nil {
+        fnName = fn.Name()
+        // Extract package from function name
+        if idx := strings.LastIndex(fnName, "/"); idx >= 0 {
+            fnName = fnName[idx+1:]
+        }
+        if idx := strings.Index(fnName, "."); idx >= 0 {
+            pkgName = fnName[:idx]
+            fnName = fnName[idx+1:]
+        }
+    }
+
+    return &CallerInfo{
+        File:     filepath.Base(file),
+        FileFull: file,
+        Line:     line,
+        Func:     fnName,
+        Package:  pkgName,
+    }
+}
+```
+
+Uses Go's `runtime.Caller()` to retrieve call stack information.
+
+## String Formatting
+
+From `~/workspace/source/caller.go:51-65`:
+
+### String() - Short Format
+
+```go
+func (c *CallerInfo) String() string {
+    return fmt.Sprintf("%s:%d", c.File, c.Line)
+}
+// Output: "main.go:42"
+```
+
+### FullString() - Detailed Format
+
+```go
+func (c *CallerInfo) FullString() string {
+    return fmt.Sprintf("%s:%d %s", c.File, c.Line, c.Func)
+}
+// Output: "main.go:42 handleRequest"
+```
+
+## Accessing Caller Info
+
+From `~/workspace/source/entry.go:24-26`:
+
+Caller info is stored in the `Entry` struct:
+
+```go
+type Entry struct {
+    Level      Level
+    Message    string
+    Fields     []Field
+    Timestamp  time.Time
+    Caller     *CallerInfo  // Optional caller information
+    StackTrace []byte
+}
+```
+
+### In Hooks
+
+```go
+type MyHook struct{}
+
+func (h *MyHook) Run(entry *go_logs.Entry) error {
+    if entry.Caller != nil {
+        fmt.Printf("Log from %s:%d in %s\n",
+            entry.Caller.File,
+            entry.Caller.Line,
+            entry.Caller.Func,
+        )
+    }
+    return nil
+}
+```
+
+### In Formatters
+
+Formatters can include caller info in output:
+
+```go
+func (f *CustomFormatter) Format(entry *go_logs.Entry) ([]byte, error) {
+    var builder strings.Builder
+
+    builder.WriteString(entry.Timestamp.Format(time.RFC3339))
+    builder.WriteString(" ")
+    builder.WriteString(entry.Level.String())
+
+    // Include caller if available
+    if entry.Caller != nil {
+        builder.WriteString(" ")
+        builder.WriteString(entry.Caller.String())  // file:line
+    }
+
+    builder.WriteString(" ")
+    builder.WriteString(entry.Message)
+    builder.WriteString("\n")
+
+    return []byte(builder.String()), nil
+}
+```
+
+## When Caller is Captured
+
+From `~/workspace/source/logger_impl.go:177-179`:
+
+```go
+// Capture caller info if enabled or level meets auto-capture threshold
+if l.enableCaller || level >= l.callerLevel {
+    entry.Caller = GetCaller(l.callerSkip)
+}
+```
+
+Caller info is captured when:
+1. `WithCaller(true)` is set (all levels), **OR**
+2. Log level ≥ `callerLevel` (auto-capture threshold)
+
+## Examples
+
+### Enable for All Levels
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+)
+
+func main() {
+    logger.Info("starting application")
+    // Output: [2026/03/03 10:00:00] INFO main.go:10 main starting application
+
+    processRequest()
+}
+
+func processRequest() {
+    logger.Debug("processing request")
+    // Output: [2026/03/03 10:00:01] DEBUG server.go:42 processRequest processing request
+}
+```
+
+### Auto-Capture for Errors Only
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCallerLevel(go_logs.ErrorLevel),  // Default behavior
+)
+
+logger.Info("request received")      // No caller: INFO request received
+logger.Error("database error")       // With caller: ERROR db.go:99 query database error
+```
+
+### Custom Skip for Wrapper Functions
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+    go_logs.WithCallerSkip(3),  // Skip wrapper function
+)
+
+// Wrapper function
+func LogInfo(msg string, fields ...go_logs.Field) {
+    logger.Info(msg, fields...)  // Caller will be the caller of LogInfo
+}
+
+func main() {
+    LogInfo("application started")
+    // Output: INFO main.go:15 main application started (not logger.go:X LogInfo)
+}
+```
+
+### Conditional Caller Based on Environment
+
+```go
+func NewLogger() (go_logs.Logger, error) {
+    opts := []go_logs.Option{
+        go_logs.WithLevel(go_logs.InfoLevel),
+    }
+
+    if os.Getenv("ENV") == "development" {
+        // Enable caller in dev for better debugging
+        opts = append(opts, go_logs.WithCaller(true))
+    } else {
+        // Production: caller only for errors
+        opts = append(opts, go_logs.WithCallerLevel(go_logs.ErrorLevel))
+    }
+
+    return go_logs.New(opts...)
+}
+```
+
+## Performance Impact
+
+From `~/workspace/source/options.go:143`:
+
+- **~100-200ns per log call** when enabled
+- Uses `runtime.Caller()` which has overhead
+- Consider using `WithCallerLevel` instead of `WithCaller(true)` to reduce cost
+
+Benchmark (approximate):
+```
+Without Caller: 220 ns/op
+With Caller:    380 ns/op  (+73%)
+```
+
+## Best Practices
+
+### Use CallerLevel in Production
+
+```go
+// Production configuration
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithCallerLevel(go_logs.ErrorLevel),  // Caller only for errors
+)
+```
+
+Benefits:
+- Lower overhead for Info/Debug logs
+- Caller info where it matters (errors)
+- Better production performance
+
+### Enable in Development
+
+```go
+// Development configuration
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.DebugLevel),
+    go_logs.WithCaller(true),  // Caller for all levels
+)
+```
+
+Benefits:
+- Easier debugging
+- Faster issue identification
+- Better code navigation
+
+### Adjust Skip for Wrappers
+
+If you wrap the logger:
+
+```go
+type MyLogger struct {
+    logger go_logs.Logger
+}
+
+func NewMyLogger() *MyLogger {
+    logger, _ := go_logs.New(
+        go_logs.WithCaller(true),
+        go_logs.WithCallerSkip(3),  // +1 for wrapper layer
+    )
+    return &MyLogger{logger: logger}
+}
+
+func (l *MyLogger) Info(msg string, fields ...go_logs.Field) {
+    l.logger.Info(msg, fields...)
+}
+```
+
+## Troubleshooting
+
+### Wrong File/Line Shown
+
+**Problem**: Caller shows logger wrapper instead of actual call site.
+
+**Solution**: Increase skip count:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+    go_logs.WithCallerSkip(3),  // Increase from default 2
+)
+```
+
+### Caller is nil
+
+**Problem**: `entry.Caller` is `nil` in hooks/formatters.
+
+**Solution**: Ensure caller is enabled:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),  // OR
+    go_logs.WithCallerLevel(go_logs.WarnLevel),
+)
+```
+
+And check log level meets threshold.
+
+### Performance Degradation
+
+**Problem**: Logging is slower with caller enabled.
+
+**Solution**: Use `WithCallerLevel` instead of `WithCaller(true)`:
+
+```go
+// Before: Caller for all levels
+logger, _ := go_logs.New(
+    go_logs.WithCaller(true),
+)
+
+// After: Caller only for errors
+logger, _ := go_logs.New(
+    go_logs.WithCallerLevel(go_logs.ErrorLevel),
+)
+```
+
+## See Also
+
+- [Stack Traces](/advanced/stack-traces) - Capture full call stack for errors
+- [Formatters](/core-concepts/formatters) - Include caller in output format
+- [Entry](/api-reference/entry) - Entry structure with caller info

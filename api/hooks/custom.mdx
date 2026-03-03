@@ -1,0 +1,608 @@
+---
+title: 'Creating Custom Hooks'
+description: 'Guide to implementing custom hooks for log processing'
+---
+
+## Overview
+
+Custom hooks allow you to extend go_logs with your own log processing logic. This guide shows how to create hooks for various use cases including metrics collection, alerting, filtering, and integration with external systems.
+
+## Quick Start
+
+### Simple Function Hook
+
+The easiest way to create a hook:
+
+```go
+import "github.com/drossan/go_logs"
+
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    // Your processing logic here
+    fmt.Printf("Log: %s\n", entry.Message)
+    return nil
+})
+
+logger := go_logs.New(
+    go_logs.WithHooks(hook),
+)
+```
+
+### Struct-Based Hook
+
+For hooks that need state:
+
+```go
+type MyHook struct {
+    // Hook state
+}
+
+func (h *MyHook) Run(entry *go_logs.Entry) error {
+    // Your processing logic here
+    return nil
+}
+
+// Usage
+hook := &MyHook{}
+logger := go_logs.New(
+    go_logs.WithHooks(hook),
+)
+```
+
+## Hook Interface
+
+All hooks must implement this interface:
+
+```go
+type Hook interface {
+    Run(entry *Entry) error
+}
+```
+
+**Parameters:**
+- `entry` - Complete log entry with level, message, fields, timestamp, etc.
+
+**Returns:**
+- `error` - Return error if hook processing failed, nil otherwise
+
+## Entry Structure
+
+The Entry passed to hooks contains:
+
+```go
+type Entry struct {
+    Level      Level        // Log level (TRACE, DEBUG, INFO, etc.)
+    Message    string       // Log message
+    Fields     []Field      // Structured key-value fields
+    Timestamp  time.Time    // When log was created
+    Caller     *CallerInfo  // Source file/line (if enabled)
+    StackTrace []byte       // Stack trace (if enabled)
+}
+```
+
+**Available methods:**
+```go
+// Inspection
+entry.HasField(key string) bool
+entry.GetField(key string) Field
+entry.GetFieldValue(key string) interface{}
+entry.FieldCount() int
+
+// Modification (returns new entry)
+entry.Clone() *Entry
+entry.WithFields(fields ...Field) *Entry
+entry.WithLevel(level Level) *Entry
+entry.WithMessage(msg string) *Entry
+```
+
+## Common Hook Patterns
+
+### 1. Metrics Collection Hook
+
+```go
+import (
+    "github.com/drossan/go_logs"
+    "sync/atomic"
+)
+
+type MetricsHook struct {
+    totalLogs   int64
+    errorLogs   int64
+    warningLogs int64
+}
+
+func (h *MetricsHook) Run(entry *go_logs.Entry) error {
+    atomic.AddInt64(&h.totalLogs, 1)
+    
+    switch entry.Level {
+    case go_logs.ErrorLevel, go_logs.FatalLevel:
+        atomic.AddInt64(&h.errorLogs, 1)
+    case go_logs.WarnLevel:
+        atomic.AddInt64(&h.warningLogs, 1)
+    }
+    
+    return nil
+}
+
+func (h *MetricsHook) GetMetrics() (total, errors, warnings int64) {
+    return atomic.LoadInt64(&h.totalLogs),
+           atomic.LoadInt64(&h.errorLogs),
+           atomic.LoadInt64(&h.warningLogs)
+}
+
+// Usage
+metrics := &MetricsHook{}
+logger := go_logs.New(go_logs.WithHooks(metrics))
+
+// Later: retrieve metrics
+total, errors, warnings := metrics.GetMetrics()
+fmt.Printf("Total: %d, Errors: %d, Warnings: %d\n", total, errors, warnings)
+```
+
+### 2. Level-Filtered Hook
+
+```go
+type LevelFilteredHook struct {
+    minLevel go_logs.Level
+    handler  func(*go_logs.Entry) error
+}
+
+func NewLevelFilteredHook(minLevel go_logs.Level, handler func(*go_logs.Entry) error) *LevelFilteredHook {
+    return &LevelFilteredHook{
+        minLevel: minLevel,
+        handler:  handler,
+    }
+}
+
+func (h *LevelFilteredHook) Run(entry *go_logs.Entry) error {
+    // Fast-path: skip if below threshold
+    if !entry.Level.ShouldLog(h.minLevel) {
+        return nil
+    }
+    
+    return h.handler(entry)
+}
+
+// Usage: Only process errors and above
+hook := NewLevelFilteredHook(go_logs.ErrorLevel, func(entry *go_logs.Entry) error {
+    return sendAlert(entry)
+})
+```
+
+### 3. Async Hook with Channel
+
+```go
+import "context"
+
+type AsyncHook struct {
+    entryChan chan *go_logs.Entry
+    ctx       context.Context
+    cancel    context.CancelFunc
+}
+
+func NewAsyncHook(bufferSize int) *AsyncHook {
+    ctx, cancel := context.WithCancel(context.Background())
+    
+    h := &AsyncHook{
+        entryChan: make(chan *go_logs.Entry, bufferSize),
+        ctx:       ctx,
+        cancel:    cancel,
+    }
+    
+    // Start background processor
+    go h.process()
+    
+    return h
+}
+
+func (h *AsyncHook) Run(entry *go_logs.Entry) error {
+    // Non-blocking send (drops if buffer full)
+    select {
+    case h.entryChan <- entry.Clone():
+    default:
+        // Buffer full, drop entry
+    }
+    return nil
+}
+
+func (h *AsyncHook) process() {
+    for {
+        select {
+        case entry := <-h.entryChan:
+            // Process entry asynchronously
+            h.handleEntry(entry)
+        case <-h.ctx.Done():
+            return
+        }
+    }
+}
+
+func (h *AsyncHook) handleEntry(entry *go_logs.Entry) {
+    // Your async processing logic
+    sendToExternalSystem(entry)
+}
+
+func (h *AsyncHook) Stop() {
+    h.cancel()
+    close(h.entryChan)
+}
+
+// Usage
+asyncHook := NewAsyncHook(1000) // Buffer 1000 entries
+defer asyncHook.Stop()
+
+logger := go_logs.New(go_logs.WithHooks(asyncHook))
+```
+
+### 4. Sampling Hook (Rate Limiting)
+
+```go
+import (
+    "sync"
+    "time"
+)
+
+type SamplingHook struct {
+    interval  time.Duration
+    maxCount  int
+    handler   func(*go_logs.Entry) error
+    
+    mu        sync.Mutex
+    count     int
+    lastReset time.Time
+}
+
+func NewSamplingHook(interval time.Duration, maxCount int, handler func(*go_logs.Entry) error) *SamplingHook {
+    return &SamplingHook{
+        interval:  interval,
+        maxCount:  maxCount,
+        handler:   handler,
+        lastReset: time.Now(),
+    }
+}
+
+func (h *SamplingHook) Run(entry *go_logs.Entry) error {
+    h.mu.Lock()
+    defer h.mu.Unlock()
+    
+    now := time.Now()
+    
+    // Reset counter if interval has passed
+    if now.Sub(h.lastReset) > h.interval {
+        h.count = 0
+        h.lastReset = now
+    }
+    
+    // Check if within limit
+    if h.count >= h.maxCount {
+        return nil // Drop this entry
+    }
+    
+    h.count++
+    return h.handler(entry)
+}
+
+// Usage: Max 100 alerts per minute
+hook := NewSamplingHook(time.Minute, 100, func(entry *go_logs.Entry) error {
+    return sendAlert(entry)
+})
+```
+
+### 5. Field-Based Routing Hook
+
+```go
+type RoutingHook struct {
+    routes map[string]func(*go_logs.Entry) error
+}
+
+func NewRoutingHook() *RoutingHook {
+    return &RoutingHook{
+        routes: make(map[string]func(*go_logs.Entry) error),
+    }
+}
+
+func (h *RoutingHook) AddRoute(fieldKey string, handler func(*go_logs.Entry) error) {
+    h.routes[fieldKey] = handler
+}
+
+func (h *RoutingHook) Run(entry *go_logs.Entry) error {
+    // Route based on field presence
+    for key, handler := range h.routes {
+        if entry.HasField(key) {
+            if err := handler(entry); err != nil {
+                return err
+            }
+        }
+    }
+    return nil
+}
+
+// Usage
+router := NewRoutingHook()
+
+// Route user events to user log
+router.AddRoute("user_id", func(entry *go_logs.Entry) error {
+    return logToUserFile(entry)
+})
+
+// Route payment events to audit log
+router.AddRoute("payment_id", func(entry *go_logs.Entry) error {
+    return logToAuditSystem(entry)
+})
+
+logger := go_logs.New(go_logs.WithHooks(router))
+```
+
+### 6. Deduplication Hook
+
+```go
+import (
+    "crypto/sha256"
+    "fmt"
+    "sync"
+    "time"
+)
+
+type DeduplicationHook struct {
+    window   time.Duration
+    handler  func(*go_logs.Entry) error
+    
+    mu       sync.Mutex
+    seen     map[string]time.Time
+}
+
+func NewDeduplicationHook(window time.Duration, handler func(*go_logs.Entry) error) *DeduplicationHook {
+    return &DeduplicationHook{
+        window:  window,
+        handler: handler,
+        seen:    make(map[string]time.Time),
+    }
+}
+
+func (h *DeduplicationHook) Run(entry *go_logs.Entry) error {
+    // Create hash of message + level
+    hash := h.hash(entry)
+    
+    h.mu.Lock()
+    defer h.mu.Unlock()
+    
+    now := time.Now()
+    
+    // Clean old entries
+    for k, t := range h.seen {
+        if now.Sub(t) > h.window {
+            delete(h.seen, k)
+        }
+    }
+    
+    // Check if seen recently
+    if lastSeen, ok := h.seen[hash]; ok {
+        if now.Sub(lastSeen) < h.window {
+            return nil // Duplicate, skip
+        }
+    }
+    
+    h.seen[hash] = now
+    return h.handler(entry)
+}
+
+func (h *DeduplicationHook) hash(entry *go_logs.Entry) string {
+    data := fmt.Sprintf("%s:%s", entry.Level, entry.Message)
+    sum := sha256.Sum256([]byte(data))
+    return fmt.Sprintf("%x", sum)
+}
+
+// Usage: Suppress duplicate errors within 1 minute
+hook := NewDeduplicationHook(time.Minute, func(entry *go_logs.Entry) error {
+    return sendAlert(entry)
+})
+```
+
+### 7. File Output Hook
+
+```go
+import (
+    "encoding/json"
+    "os"
+    "sync"
+)
+
+type FileHook struct {
+    file *os.File
+    mu   sync.Mutex
+}
+
+func NewFileHook(filename string) (*FileHook, error) {
+    file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+    if err != nil {
+        return nil, err
+    }
+    
+    return &FileHook{file: file}, nil
+}
+
+func (h *FileHook) Run(entry *go_logs.Entry) error {
+    h.mu.Lock()
+    defer h.mu.Unlock()
+    
+    // Write as JSON
+    data := map[string]interface{}{
+        "timestamp": entry.Timestamp,
+        "level":     entry.Level.String(),
+        "message":   entry.Message,
+    }
+    
+    // Add fields
+    if len(entry.Fields) > 0 {
+        fields := make(map[string]interface{})
+        for _, f := range entry.Fields {
+            fields[f.Key()] = f.Value()
+        }
+        data["fields"] = fields
+    }
+    
+    jsonData, err := json.Marshal(data)
+    if err != nil {
+        return err
+    }
+    
+    _, err = h.file.Write(append(jsonData, '\n'))
+    return err
+}
+
+func (h *FileHook) Close() error {
+    return h.file.Close()
+}
+
+// Usage: Log errors to separate file
+fileHook, _ := NewFileHook("/var/log/errors.json")
+defer fileHook.Close()
+
+filteredHook := NewLevelFilteredHook(go_logs.ErrorLevel, fileHook.Run)
+logger := go_logs.New(go_logs.WithHooks(filteredHook))
+```
+
+## Best Practices
+
+<Tip>
+**Keep Hooks Fast**
+
+Hooks run synchronously. For slow operations, use async processing:
+
+```go
+// Good: Fast hook with async processing
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    select {
+    case eventChan <- entry.Clone():
+    default:
+    }
+    return nil
+})
+
+// Bad: Slow synchronous operation
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    return http.Post("...", ...) // Blocks logging!
+})
+```
+</Tip>
+
+<Tip>
+**Level Filtering**
+
+Filter early to avoid unnecessary processing:
+
+```go
+func (h *MyHook) Run(entry *go_logs.Entry) error {
+    // Fast-path: check level first
+    if !entry.Level.ShouldLog(go_logs.ErrorLevel) {
+        return nil
+    }
+    
+    // Expensive processing only for errors
+    return h.processError(entry)
+}
+```
+</Tip>
+
+<Tip>
+**Clone Entries for Async Processing**
+
+Always clone entries before passing to goroutines:
+
+```go
+hook := go_logs.NewFuncHook(func(entry *go_logs.Entry) error {
+    cloned := entry.Clone() // Important!
+    go processAsync(cloned)
+    return nil
+})
+```
+</Tip>
+
+<Warning>
+**Thread Safety**
+
+Make hooks thread-safe if they maintain state:
+
+```go
+type StatefulHook struct {
+    mu    sync.Mutex
+    state map[string]interface{}
+}
+
+func (h *StatefulHook) Run(entry *go_logs.Entry) error {
+    h.mu.Lock()
+    defer h.mu.Unlock()
+    
+    // Thread-safe state access
+    h.state[entry.Message] = entry.Timestamp
+    return nil
+}
+```
+
+Or use atomic operations for counters:
+
+```go
+type CounterHook struct {
+    count int64
+}
+
+func (h *CounterHook) Run(entry *go_logs.Entry) error {
+    atomic.AddInt64(&h.count, 1)
+    return nil
+}
+```
+</Warning>
+
+<Warning>
+**Error Handling**
+
+Return errors for failures, but know they won't stop logging:
+
+```go
+func (h *MyHook) Run(entry *go_logs.Entry) error {
+    if err := h.process(entry); err != nil {
+        // Error is logged but other hooks and writing continue
+        return fmt.Errorf("hook processing failed: %w", err)
+    }
+    return nil
+}
+```
+</Warning>
+
+## Testing Hooks
+
+```go
+import "testing"
+
+func TestMetricsHook(t *testing.T) {
+    hook := &MetricsHook{}
+    
+    // Create test entry
+    entry := &go_logs.Entry{
+        Level:     go_logs.ErrorLevel,
+        Message:   "test error",
+        Timestamp: time.Now(),
+    }
+    
+    // Run hook
+    err := hook.Run(entry)
+    if err != nil {
+        t.Fatalf("Hook failed: %v", err)
+    }
+    
+    // Verify metrics
+    total, errors, _ := hook.GetMetrics()
+    if total != 1 {
+        t.Errorf("Expected total=1, got %d", total)
+    }
+    if errors != 1 {
+        t.Errorf("Expected errors=1, got %d", errors)
+    }
+}
+```
+
+## Related
+
+- [Hook Interface](/api/hooks/interface) - Base hook interface documentation
+- [SlackHook](/api/hooks/slack) - Built-in Slack hook example
+- [Logger Options](/api/logger#options) - WithHooks option
+- [Entry API](/api/entry) - Entry methods for hooks

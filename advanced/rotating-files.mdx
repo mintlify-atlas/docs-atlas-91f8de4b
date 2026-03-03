@@ -1,0 +1,400 @@
+---
+title: 'Rotating File Writer'
+description: 'Automatic log file rotation by size and time with compression support'
+---
+
+## Overview
+
+go_logs provides two rotating file writers with **zero external dependencies**:
+
+1. **RotatingFileWriter** - Simple size-based rotation (`~/workspace/source/rotating_writer.go`)
+2. **EnhancedRotatingFileWriter** - Advanced rotation with time-based rotation and compression (`~/workspace/source/rotating_writer_enhanced.go`)
+
+Both implementations are thread-safe and use buffered writes for high performance.
+
+## Simple Rotation (Size-Based)
+
+### Creating a Rotating Writer
+
+From `~/workspace/source/rotating_writer.go:60`:
+
+```go
+import "github.com/drossan/go_logs"
+
+// Create writer: 100MB max size, keep 5 backups
+writer, err := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+if err != nil {
+    log.Fatal(err)
+}
+defer writer.Close()
+
+logger, _ := go_logs.New(
+    go_logs.WithOutput(writer),
+)
+```
+
+### Parameters
+
+- **filename**: Path to log file (e.g., `"app.log"` or `"/var/log/app.log"`)
+- **maxSizeMB**: Maximum size in megabytes before rotation (e.g., `100`)
+- **maxBackups**: Maximum number of backup files to keep (e.g., `5`)
+
+### How It Works
+
+From `~/workspace/source/rotating_writer.go:103-107`:
+
+1. Logs are written to `app.log`
+2. When file exceeds `maxSizeMB`, rotation occurs:
+   - `app.log.3` → `app.log.4` (deleted if exceeds maxBackups)
+   - `app.log.2` → `app.log.3`
+   - `app.log.1` → `app.log.2`
+   - `app.log` → `app.log.1`
+   - New empty `app.log` is created
+3. Process continues writing to new `app.log`
+
+### Manual Rotation
+
+From `~/workspace/source/rotating_writer.go:134`:
+
+```go
+// Force rotation (useful for SIGHUP handlers)
+err := writer.Rotate()
+if err != nil {
+    log.Printf("rotation failed: %v", err)
+}
+```
+
+### Syncing to Disk
+
+From `~/workspace/source/rotating_writer.go:222`:
+
+```go
+// Flush buffered data to disk (important before exit)
+err := writer.Sync()
+if err != nil {
+    log.Printf("sync failed: %v", err)
+}
+```
+
+## Enhanced Rotation (Time-Based + Compression)
+
+### Basic Time-Based Rotation
+
+From `~/workspace/source/rotating_writer_enhanced.go:84`:
+
+```go
+import "github.com/drossan/go_logs"
+
+// Rotate daily at midnight
+writer, err := go_logs.NewRotatingFileWriterWithRotation(
+    "/var/log/app.log",
+    100,                      // maxSizeMB (still applies)
+    5,                        // maxBackups
+    go_logs.RotateDaily,      // rotation type
+)
+```
+
+### Rotation Types
+
+From `~/workspace/source/rotating_writer_enhanced.go:14-24`:
+
+```go
+const (
+    RotateSize   // Rotate when file exceeds MaxSizeMB (default)
+    RotateDaily  // Rotate at midnight (00:00)
+    RotateHourly // Rotate at the start of each hour
+)
+```
+
+### Full Configuration
+
+From `~/workspace/source/rotating_writer_enhanced.go:41-62` and `~/workspace/source/rotating_writer_enhanced.go:95`:
+
+```go
+writer, err := go_logs.NewRotatingFileWriterWithConfig(
+    go_logs.RotatingFileConfig{
+        Filename:     "/var/log/app.log",
+        MaxSizeMB:    100,                // Max size before rotation
+        MaxBackups:   5,                  // Max backup files to keep
+        RotationType: go_logs.RotateDaily, // When to rotate
+        Compress:     true,               // Gzip old files
+        MaxAge:       30,                 // Keep 30 days (0 = no limit)
+        LocalTime:    true,               // Use local time (false = UTC)
+    },
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer writer.Close()
+
+logger, _ := go_logs.New(
+    go_logs.WithOutput(writer),
+)
+```
+
+### Configuration Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `Filename` | `string` | Path to log file |
+| `MaxSizeMB` | `int` | Maximum size in MB before rotation |
+| `MaxBackups` | `int` | Maximum number of backup files to keep (0 = unlimited) |
+| `RotationType` | `RotationType` | When to rotate: `RotateSize`, `RotateDaily`, `RotateHourly` |
+| `Compress` | `bool` | Enable gzip compression of rotated files |
+| `MaxAge` | `int` | Maximum days to keep old log files (0 = unlimited) |
+| `LocalTime` | `bool` | Use local time for rotation timestamps (false = UTC) |
+
+### Using WithRotatingFileEnhanced
+
+From `~/workspace/source/options.go:250`:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+        Filename:     "/var/log/app.log",
+        MaxSizeMB:    100,
+        MaxBackups:   10,
+        RotationType: go_logs.RotateDaily,
+        Compress:     true,
+        MaxAge:       90, // Keep 90 days
+        LocalTime:    true,
+    }),
+)
+```
+
+## File Naming
+
+### Size-Based Rotation
+
+```
+app.log       # Current log file
+app.log.1     # Most recent backup
+app.log.2     # Second most recent
+app.log.3     # Third most recent
+app.log.4     # Oldest backup (deleted when rotating with MaxBackups=3)
+```
+
+### Time-Based Rotation
+
+From `~/workspace/source/rotating_writer_enhanced.go:203-211`:
+
+```
+app.log                    # Current log file
+app-2026-03-03_00-00-00.log       # Daily rotation
+app-2026-03-02_00-00-00.log
+app-2026-03-01_00-00-00.log
+```
+
+### With Compression
+
+```
+app.log                           # Current (uncompressed)
+app-2026-03-03_00-00-00.log.gz    # Compressed backup
+app-2026-03-02_00-00-00.log.gz
+```
+
+## Performance Features
+
+### Buffered Writes
+
+From `~/workspace/source/rotating_writer.go:43` and `~/workspace/source/rotating_writer.go:202`:
+
+- All writes use `bufio.Writer` for buffering
+- Reduces system calls and improves throughput
+- Automatically flushed on rotation and close
+
+### Thread-Safety
+
+From `~/workspace/source/rotating_writer.go:46` and `~/workspace/source/rotating_writer.go:91-92`:
+
+```go
+mu sync.Mutex
+
+func (w *RotatingFileWriter) Write(p []byte) (n int, err error) {
+    w.mu.Lock()
+    defer w.mu.Unlock()
+    // ...
+}
+```
+
+All operations are protected by a mutex, allowing concurrent writes from multiple goroutines.
+
+## Automatic Directory Creation
+
+From `~/workspace/source/rotating_writer.go:186-192`:
+
+```go
+// Create directory if it doesn't exist
+dir := filepath.Dir(w.filename)
+if dir != "" && dir != "." {
+    if err := os.MkdirAll(dir, 0755); err != nil {
+        return fmt.Errorf("failed to create directory: %w", err)
+    }
+}
+```
+
+The writer automatically creates parent directories with `0755` permissions.
+
+## File Permissions
+
+From `~/workspace/source/rotating_writer.go:196`:
+
+- Log files are created with `0600` permissions (owner read/write only)
+- Directories are created with `0755` permissions
+- Ensures logs are not world-readable for security
+
+## Compression
+
+From `~/workspace/source/rotating_writer_enhanced.go:278-315`:
+
+```go
+func (w *EnhancedRotatingFileWriter) compressFile(src, dst string) error {
+    // Opens source file
+    // Creates gzip writer
+    // Copies data with 32KB buffer
+    // Removes original after successful compression
+}
+```
+
+- Compression uses standard library `compress/gzip`
+- 32KB buffer for efficient compression
+- Original file removed after successful compression
+- Errors during compression fall back to uncompressed rotation
+
+## Cleanup Policies
+
+### By Backup Count
+
+From `~/workspace/source/rotating_writer_enhanced.go:407-411`:
+
+- Keeps only `MaxBackups` most recent files
+- Older files are deleted automatically
+- Applied after each rotation
+
+### By Age
+
+From `~/workspace/source/rotating_writer_enhanced.go:373-380`:
+
+- Files older than `MaxAge` days are deleted
+- Calculated from file modification time
+- Applied before backup count cleanup
+
+## Integration Examples
+
+### Daily Logs with 30-Day Retention
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+        Filename:     "/var/log/myapp/app.log",
+        MaxSizeMB:    50,
+        RotationType: go_logs.RotateDaily,
+        Compress:     true,
+        MaxAge:       30,  // Delete files older than 30 days
+        LocalTime:    true,
+    }),
+)
+```
+
+### Hourly Logs for High-Volume Services
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFileEnhanced(go_logs.RotatingFileConfig{
+        Filename:     "/var/log/api/requests.log",
+        MaxSizeMB:    100,
+        MaxBackups:   24,  // Keep 24 hours
+        RotationType: go_logs.RotateHourly,
+        Compress:     true,
+        LocalTime:    true,
+    }),
+)
+```
+
+### Size-Based with Simple Config
+
+From `~/workspace/source/options.go:274`:
+
+```go
+logger, _ := go_logs.New(
+    go_logs.WithRotatingFile("/var/log/app.log", 100, 5),
+)
+```
+
+## Multi-Output with Rotation
+
+```go
+file, _ := go_logs.NewRotatingFileWriter("/var/log/app.log", 100, 5)
+
+logger, _ := go_logs.New(
+    go_logs.WithMultiOutput(file, os.Stdout), // Log to both file and console
+)
+```
+
+## Best Practices
+
+### Always Close Writers
+
+```go
+writer, err := go_logs.NewRotatingFileWriter("app.log", 100, 5)
+if err != nil {
+    log.Fatal(err)
+}
+defer writer.Close() // Ensures buffered data is flushed
+```
+
+### Sync Before Exit
+
+```go
+func main() {
+    logger, _ := go_logs.New(
+        go_logs.WithRotatingFile("app.log", 100, 5),
+    )
+    defer logger.Sync() // Flush logs before exit
+
+    // Application code...
+}
+```
+
+### Handle Rotation Errors
+
+```go
+if err := writer.Rotate(); err != nil {
+    log.Printf("manual rotation failed: %v", err)
+    // Decide whether to continue or exit
+}
+```
+
+### Monitor Disk Space
+
+- Set `MaxBackups` and `MaxAge` to prevent unlimited disk usage
+- Monitor log volume and adjust `MaxSizeMB` as needed
+- Use compression for long-term storage
+
+## Troubleshooting
+
+### Rotation Not Happening
+
+Check:
+- Current file size with `GetCurrentSize()`
+- Max size setting with `GetMaxSize()`
+- Next rotation time with `GetNextRotationTime()` (enhanced only)
+
+### Permission Denied
+
+Ensure:
+- Process has write permissions to log directory
+- Log file is not open in another process
+- No file locks on rotated files
+
+### Disk Space Issues
+
+Configure:
+- `MaxBackups` to limit file count
+- `MaxAge` to automatically delete old files
+- `Compress` to reduce storage usage by 70-90%
+
+## See Also
+
+- [Configuration](/configuration) - Environment variable setup
+- [Production Deployment](/guides/production) - Best practices for production
