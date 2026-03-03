@@ -399,8 +399,92 @@ if logger.GetLevel() == go_logs.DebugLevel {
 }
 ```
 
+## Global Logger
+
+go_logs provides a global logger for convenience. This eliminates the need to pass logger instances throughout your application.
+
+### SetDefault
+
+Sets the global default logger.
+
+```go
+go_logs.SetDefault(l Logger)
+```
+
+**Example:**
+```go
+// Configure logger once at startup
+logger, _ := go_logs.New(
+    go_logs.WithLevel(go_logs.InfoLevel),
+    go_logs.WithFormatter(go_logs.NewJSONFormatter()),
+)
+go_logs.SetDefault(logger)
+
+// Use global logger anywhere in your application
+go_logs.GlobalInfo("Server started", go_logs.Int("port", 8080))
+```
+
+### Default
+
+Returns the global default logger.
+
+```go
+go_logs.Default() Logger
+```
+
+**Example:**
+```go
+logger := go_logs.Default()
+logger.Info("Using default logger")
+```
+
+### SetDefaultLevel
+
+Sets the level of the global default logger.
+
+```go
+go_logs.SetDefaultLevel(level Level)
+```
+
+**Example:**
+```go
+// Enable debug mode globally
+go_logs.SetDefaultLevel(go_logs.DebugLevel)
+```
+
+### Global Logging Functions
+
+Convenience functions that use the default logger:
+
+```go
+go_logs.GlobalTrace(msg string, fields ...Field)
+go_logs.GlobalDebug(msg string, fields ...Field)
+go_logs.GlobalInfo(msg string, fields ...Field)
+go_logs.GlobalWarn(msg string, fields ...Field)
+go_logs.GlobalError(msg string, fields ...Field)
+go_logs.GlobalFatal(msg string, fields ...Field) // Exits program
+```
+
+**Example:**
+```go
+// Set up once
+go_logs.SetDefault(logger)
+
+// Use anywhere without passing logger
+go_logs.GlobalInfo("Processing request",
+    go_logs.String("request_id", "abc-123"),
+)
+go_logs.GlobalError("Failed to connect",
+    go_logs.Err(err),
+)
+```
+
+<Note>
+The global logger is thread-safe and can be used from multiple goroutines simultaneously.
+</Note>
+
 ## Next Steps
 
 - [Environment Variables](/configuration/environment-variables) - Configure via environment
 - [Output Destinations](/configuration/output-destinations) - File rotation and multiple outputs
-- [Hooks](/extensibility/hooks) - Extend logger functionality
+- [Advanced Features](/advanced/hooks) - Extend logger functionality
